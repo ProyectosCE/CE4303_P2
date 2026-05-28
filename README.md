@@ -22,3 +22,7 @@
 ### Objetivo
 
 Implementar las diferentes capas necesarias para que una aplicación pueda interactuar con hardware a través del sistema operativo, así como fomentar el diseño y creatividad de los estudiantes en la integración del software y hardware. Implementar un algoritmo distribuidor de cargas de procesamiento en un sistema distribuido para optimizar el tiempo de respuesta, utilizando OpenMPI con información cifrada.
+
+
+
+gcc main.c pbm/pbm.c -o app

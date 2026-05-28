@@ -17,14 +17,10 @@ int main(){
 
     pbm_print_columns(img);
 
-    
-
     encrypted = pbm_encrypt(img);
 
     pbm_print_columns(encrypted);
 
-
-    // printf("mira esto: %n\n", encrypted->width);
 
     pbm_free(img);
 
