@@ -3,6 +3,11 @@
 #include <string.h>
 #include <stdint.h>
 
+#include <sys/socket.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+
 #include "pbm.h"
 
 PBM_Image *pbm_load(const char *filename)
@@ -69,13 +74,129 @@ void pbm_print_columns(PBM_Image *img)
     }
 }
 
+static int send_all(int socket,
+                    const void *buffer,
+                    size_t length)
+{
+    size_t total = 0;
 
+    while(total < length)
+    {
+        ssize_t sent =
+            send(socket,
+                 (char*)buffer + total,
+                 length - total,
+                 0);
+
+        if(sent <= 0)
+            return -1;
+
+        total += sent;
+    }
+
+    return 0;
+}
+
+static int recv_all(int socket,
+                    void *buffer,
+                    size_t length)
+{
+    size_t total = 0;
+
+    while(total < length)
+    {
+        ssize_t received =
+            recv(socket,
+                 (char*)buffer + total,
+                 length - total,
+                 0);
+
+        if(received <= 0)
+            return -1;
+
+        total += received;
+    }
+
+    return 0;
+}
+
+int pbm_send(int socket, PBM_Image *img)
+{
+    if(send_all(socket,
+                &img->width,
+                sizeof(int)) < 0)
+        return -1;
+
+    if(send_all(socket,
+                &img->height,
+                sizeof(int)) < 0)
+        return -1;
+
+    if(send_all(socket,
+                img->columns,
+                sizeof(uint32_t)
+                * img->width) < 0)
+        return -1;
+
+    return 0;
+}
+
+
+int pbm_send_to_server(const char *ip,
+                       int port,
+                       PBM_Image *img)
+{
+    int sock;
+
+    struct sockaddr_in server_addr;
+
+    sock = socket(AF_INET,
+                  SOCK_STREAM,
+                  0);
+
+    if(sock < 0)
+    {
+        return -1;
+    }
+
+    server_addr.sin_family = AF_INET;
+
+    server_addr.sin_port =
+        htons(port);
+
+    if(inet_pton(AF_INET,
+                 ip,
+                 &server_addr.sin_addr) <= 0)
+    {
+        close(sock);
+        return -1;
+    }
+
+    if(connect(sock,
+               (struct sockaddr*)&server_addr,
+               sizeof(server_addr)) < 0)
+    {
+        close(sock);
+        return -1;
+    }
+
+    if(pbm_send(sock, img) < 0)
+    {
+        close(sock);
+        return -1;
+    }
+
+    close(sock);
+
+    return 0;
+}
 
 void pbm_free(PBM_Image *img)
 {
     free(img->columns);
     free(img);
 }
+
 
 
 PBM_Image *pbm_encrypt(PBM_Image *img)

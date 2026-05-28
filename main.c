@@ -1,31 +1,26 @@
 #include "pbm/pbm.h"
 
-#include <stdio.h>
+int main()
+{
+    PBM_Image *img =
+        pbm_load("basico.pbm");
 
-int main(){
+    if(!img)
+        return 1;
 
-    PBM_Image *encrypted;
+    PBM_Image *encrypted =
+        pbm_encrypt(img);
 
-    PBM_Image *img;
-
-    img = pbm_load("basico.pbm");
-
-    
-    if (!img) {
+    if(pbm_send_to_server("127.0.0.1",
+                          8080,
+                          img) < 0)
+    {
         return 1;
     }
-
-    pbm_print_columns(img);
-
-    encrypted = pbm_encrypt(img);
-
-    pbm_print_columns(encrypted);
-
 
     pbm_free(img);
 
     pbm_free(encrypted);
-
 
     return 0;
 }

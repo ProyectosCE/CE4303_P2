@@ -1,5 +1,6 @@
 #ifndef PBM_H
 #define PBM_H
+
 #include <stdint.h>
 
 typedef struct {
@@ -18,6 +19,14 @@ void pbm_print_columns(PBM_Image *img);
 void pbm_free(PBM_Image *img);
 
 PBM_Image *pbm_encrypt(PBM_Image *img);
+
+/* networking */
+
+int pbm_send_to_server(const char *ip,
+                       int port,
+                       PBM_Image *img);
+
+PBM_Image *pbm_receive(int socket);
 
 
 #endif
