@@ -1,126 +1,203 @@
-
 import tkinter as tk
 from tkinter import filedialog
+import math
 
-# Configuración
-GRID_SIZE = 16
-PIXEL_SIZE = 70
+# ==========================================
+# CONFIGURACIÓN
+# ==========================================
 
-# Matriz de pixeles (0 = blanco, 1 = negro)
+GRID_SIZE = 32
+PIXEL_SIZE = 22
+
+CENTER = GRID_SIZE // 2
+RADIUS = GRID_SIZE // 2
+
+# Colores
+BG_COLOR = "#1e1e1e"
+CANVAS_BG = "#2b2b2b"
+PIXEL_OFF = "#f2f2f2"
+PIXEL_ON = "#00ff9c"
+GRID_COLOR = "#404040"
+OUTSIDE_COLOR = "#252525"
+
+BUTTON_BG = "#3a3a3a"
+BUTTON_FG = "white"
+
+# Matriz de pixeles
 pixels = [[0 for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
 
-# Crear ventana
-root = tk.Tk()
-root.title("Editor PBM")
+# ==========================================
+# VENTANA
+# ==========================================
 
+root = tk.Tk()
+root.title("POV Circular Editor")
+root.configure(bg=BG_COLOR)
+
+# Frame principal
+main_frame = tk.Frame(root, bg=BG_COLOR)
+main_frame.pack(padx=15, pady=15)
+
+# Título
+title = tk.Label(
+    main_frame,
+    text="POV DISPLAY EDITOR",
+    font=("Consolas", 20, "bold"),
+    fg="#00ff9c",
+    bg=BG_COLOR
+)
+title.pack(pady=(0, 10))
+
+# Canvas
 canvas = tk.Canvas(
-    root,
+    main_frame,
     width=GRID_SIZE * PIXEL_SIZE,
     height=GRID_SIZE * PIXEL_SIZE,
-    bg="white"
+    bg=CANVAS_BG,
+    highlightthickness=0
 )
 canvas.pack()
 
-# Dibujar cuadricula
+# ==========================================
+# FUNCIONES
+# ==========================================
+
+# Verifica si el pixel está dentro del círculo
+def inside_circle(x, y):
+
+    dx = x - CENTER
+    dy = y - CENTER
+
+    return dx * dx + dy * dy <= RADIUS * RADIUS
+
+
+# Dibujar grid circular
 def draw_grid():
+
     canvas.delete("all")
 
     for y in range(GRID_SIZE):
         for x in range(GRID_SIZE):
-            color = "black" if pixels[y][x] == 1 else "white"
 
-            canvas.create_rectangle(
-                x * PIXEL_SIZE,
-                y * PIXEL_SIZE,
-                (x + 1) * PIXEL_SIZE,
-                (y + 1) * PIXEL_SIZE,
-                fill=color,
-                outline="gray"
-            )
+            x1 = x * PIXEL_SIZE
+            y1 = y * PIXEL_SIZE
 
-# Estado del mouse
+            x2 = x1 + PIXEL_SIZE
+            y2 = y1 + PIXEL_SIZE
+
+            if inside_circle(x, y):
+
+                color = PIXEL_ON if pixels[y][x] == 1 else PIXEL_OFF
+
+                canvas.create_rectangle(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    fill=color,
+                    outline=GRID_COLOR,
+                    width=1
+                )
+
+            else:
+
+                canvas.create_rectangle(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    fill=OUTSIDE_COLOR,
+                    outline=OUTSIDE_COLOR
+                )
+
+    # Contorno exterior circular
+    margin = 2
+
+    canvas.create_oval(
+        margin,
+        margin,
+        GRID_SIZE * PIXEL_SIZE - margin,
+        GRID_SIZE * PIXEL_SIZE - margin,
+        outline="#00ff9c",
+        width=3
+    )
+
+
+# ==========================================
+# DIBUJO
+# ==========================================
+
 mouse_down = False
 paint_value = 1
-rectangle_mode = False
-start_rect = None
 
-# Dibujar rectángulo completo
-def fill_rectangle(x1, y1, x2, y2, value):
-    xmin = min(x1, x2)
-    xmax = max(x1, x2)
-    ymin = min(y1, y2)
-    ymax = max(y1, y2)
 
-    for y in range(ymin, ymax + 1):
-        for x in range(xmin, xmax + 1):
-            if 0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE:
-                pixels[y][x] = value
-
-    draw_grid()
-
-# Activar/desactivar modo rectángulo
-def toggle_rectangle_mode():
-    global rectangle_mode
-    rectangle_mode = not rectangle_mode
-
-    if rectangle_mode:
-        mode_button.config(text="Modo: Rectángulo")
-    else:
-        mode_button.config(text="Modo: Dibujo")
-
-# Pintar pixel
 def paint_pixel(event):
+
     x = event.x // PIXEL_SIZE
     y = event.y // PIXEL_SIZE
 
-    if 0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE:
+    if (
+        0 <= x < GRID_SIZE and
+        0 <= y < GRID_SIZE and
+        inside_circle(x, y)
+    ):
         pixels[y][x] = paint_value
         draw_grid()
 
-# Mouse presionado
+
 def start_paint(event):
-    global mouse_down, paint_value, start_rect
+
+    global mouse_down
+    global paint_value
 
     mouse_down = True
 
     x = event.x // PIXEL_SIZE
     y = event.y // PIXEL_SIZE
 
-    if 0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE:
-        # Si el pixel ya está negro, borrar
-        # Si está blanco, pintar
+    if (
+        0 <= x < GRID_SIZE and
+        0 <= y < GRID_SIZE and
+        inside_circle(x, y)
+    ):
+
         paint_value = 0 if pixels[y][x] == 1 else 1
 
-        if rectangle_mode:
-            start_rect = (x, y)
-        else:
-            pixels[y][x] = paint_value
-            draw_grid()
+        pixels[y][x] = paint_value
+        draw_grid()
 
-# Mouse soltado
+
 def stop_paint(event):
-    global mouse_down, start_rect
 
-    if rectangle_mode and start_rect is not None:
-        x2 = event.x // PIXEL_SIZE
-        y2 = event.y // PIXEL_SIZE
-
-        fill_rectangle(start_rect[0], start_rect[1], x2, y2, paint_value)
-        start_rect = None
-
+    global mouse_down
     mouse_down = False
 
-# Arrastrar mouse
+
 def drag_paint(event):
+
     if mouse_down:
         paint_pixel(event)
+
 
 canvas.bind("<Button-1>", start_paint)
 canvas.bind("<B1-Motion>", drag_paint)
 canvas.bind("<ButtonRelease-1>", stop_paint)
 
-# Guardar archivo PBM
+# ==========================================
+# UTILIDADES
+# ==========================================
+
+def clear_canvas():
+
+    for y in range(GRID_SIZE):
+        for x in range(GRID_SIZE):
+            pixels[y][x] = 0
+
+    draw_grid()
+
+
 def save_pbm():
+
     filename = filedialog.asksaveasfilename(
         defaultextension=".pbm",
         filetypes=[("PBM files", "*.pbm")]
@@ -130,29 +207,83 @@ def save_pbm():
         return
 
     with open(filename, "w") as f:
-        # Encabezado PBM ASCII
+
         f.write("P1\n")
         f.write(f"{GRID_SIZE} {GRID_SIZE}\n")
 
-        # Datos de pixeles
-        for row in pixels:
-            f.write(" ".join(str(pixel) for pixel in row) + "\n")
+        for y in range(GRID_SIZE):
 
-    print(f"Imagen guardada en: {filename}")
+            row_data = []
 
+            for x in range(GRID_SIZE):
 
-# Botón guardar
-save_button = tk.Button(root, text="Guardar PBM", command=save_pbm)
-save_button.pack(pady=5)
+                if inside_circle(x, y):
+                    row_data.append(str(pixels[y][x]))
+                else:
+                    row_data.append("0")
 
-# Botón modo rectángulo
-mode_button = tk.Button(root, text="Modo: Dibujo", command=toggle_rectangle_mode)
-mode_button.pack(pady=5)
+            f.write(" ".join(row_data) + "\n")
 
 
-# Dibujar inicial
+# ==========================================
+# BOTONES
+# ==========================================
+
+button_frame = tk.Frame(main_frame, bg=BG_COLOR)
+button_frame.pack(pady=12)
+
+save_button = tk.Button(
+    button_frame,
+    text="Guardar PBM",
+    command=save_pbm,
+    bg=BUTTON_BG,
+    fg=BUTTON_FG,
+    activebackground="#00aa66",
+    activeforeground="white",
+    relief="flat",
+    font=("Consolas", 12, "bold"),
+    padx=20,
+    pady=8,
+    cursor="hand2"
+)
+
+save_button.pack(side="left", padx=10)
+
+clear_button = tk.Button(
+    button_frame,
+    text="Limpiar",
+    command=clear_canvas,
+    bg=BUTTON_BG,
+    fg=BUTTON_FG,
+    activebackground="#aa3333",
+    activeforeground="white",
+    relief="flat",
+    font=("Consolas", 12, "bold"),
+    padx=20,
+    pady=8,
+    cursor="hand2"
+)
+
+clear_button.pack(side="left", padx=10)
+
+# ==========================================
+# FOOTER
+# ==========================================
+
+footer = tk.Label(
+    main_frame,
+    text="Click y arrastre para dibujar",
+    font=("Consolas", 10),
+    fg="#aaaaaa",
+    bg=BG_COLOR
+)
+
+footer.pack(pady=(5, 0))
+
+# ==========================================
+# INICIO
+# ==========================================
+
 draw_grid()
 
-# Ejecutar interfaz
 root.mainloop()
-

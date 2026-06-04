@@ -26,7 +26,7 @@ int pbm_send_to_server(const char *ip,
                        int port,
                        PBM_Image *img);
 
-PBM_Image *pbm_receive(int socket);
+
 
 
 #endif
