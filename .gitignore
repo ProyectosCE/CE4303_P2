@@ -40,3 +40,4 @@ ctags
 !*.C
 !Makefile
 
+driver/prueba_rasp.png

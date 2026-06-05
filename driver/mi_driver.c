@@ -4,9 +4,9 @@
 #include <linux/skbuff.h>
 #include <linux/fs.h>      // Necesario para registrar dispositivos en /dev/
 #include <linux/uaccess.h> // Necesario para pasar datos de Usuario a Kernel (copy_from_user)
+#include <linux/slab.h>    // Necesario para kmalloc y kfree
 
 #define DEVICE_NAME "raspberry_usb"
-#define INTERFAZ_PI "enx*"
 
 static int major_number;
 static struct packet_type mi_packet_hook;
@@ -14,31 +14,100 @@ static struct packet_type mi_packet_hook;
 // Esta función se ejecuta cuando el usuario envía la imagen al archivo /dev/raspberry_usb
 static ssize_t driver_write(struct file *file, const char __user *buffer, size_t len, loff_t *offset) {
     char *kernel_buffer;
-    
-    printk(KERN_INFO "[Mi_Driver_Proyecto] Recibiendo ráfaga de la imagen desde la aplicación del usuario. Tamaño: %zu bytes\n", len);
-    
-    // Reservar memoria segura en el Kernel para procesar los bytes de la imagen
-    kernel_buffer = kmalloc(len, GFP_KERNEL);
-    if (!kernel_buffer) {
-        return -ENOMEM;
+    struct sk_buff *skb;
+    struct net_device *dev;
+    struct net_device *net_dev;
+    unsigned char *data;
+    size_t bytes_enviados = 0;
+    size_t tamano_bloque = 1024; // Limitamos cada ráfaga a 1 KB para proteger el búfer de la Pi
+
+    printk(KERN_INFO "[Mi_Driver_Proyecto] Procesando archivo del usuario. Tamaño total solicitado: %zu bytes\n", len);
+
+    // 1. Buscar dinámicamente la interfaz de la Pi (enx*)
+    dev = NULL;
+    read_lock(&dev_base_lock);
+    for_each_netdev(&init_net, net_dev) {
+        if (strncmp(net_dev->name, "enx", 3) == 0) {
+            dev = net_dev;
+            dev_hold(dev);
+            break;
+        }
     }
-    
-    // Pasar los bytes de la imagen desde el espacio de usuario al espacio del kernel de forma segura
-    if (copy_from_user(kernel_buffer, buffer, len)) {
+    read_unlock(&dev_base_lock);
+
+    if (!dev) {
+        printk(KERN_ERR "[Mi_Driver_Proyecto] Error: Interfaz física de la Pi no encontrada.\n");
+        return -ENODEV;
+    }
+
+    // 2. Fragmentar y transmitir en bucle de 1 KB
+    while (bytes_enviados < len) {
+        size_t raga_actual = len - bytes_enviados;
+        if (raga_actual > tamano_bloque) {
+            raga_actual = tamano_bloque;
+        }
+
+        kernel_buffer = kmalloc(raga_actual, GFP_KERNEL);
+        if (!kernel_buffer) {
+            dev_put(dev);
+            return -ENOMEM;
+        }
+
+        if (copy_from_user(kernel_buffer, buffer + bytes_enviados, raga_actual)) {
+            kfree(kernel_buffer);
+            dev_put(dev);
+            return -EFAULT;
+        }
+
+        // Crear el Socket Buffer específico para este fragmento
+        skb = dev_alloc_skb(raga_actual + LL_RESERVED_SPACE(dev));
+        if (!skb) {
+            kfree(kernel_buffer);
+            dev_put(dev);
+            return -ENOMEM;
+        }
+
+        skb_reserve(skb, LL_RESERVED_SPACE(dev));
+        skb->dev = dev;
+        skb->protocol = htons(ETH_P_ALL);
+
+        data = skb_put(skb, raga_actual);
+        memcpy(data, kernel_buffer, raga_actual);
+
+        // Inyectar el fragmento seguro al cable
+        dev_queue_xmit(skb);
+
         kfree(kernel_buffer);
-        return -EFAULT;
+        bytes_enviados += raga_actual;
+        
+        // Un retraso diminuto de 100 microsegundos en el Kernel Space 
+        // para darle tiempo al procesador de la Pi de respirar y vaciar su búfer
+        udelay(100); 
     }
+
+    printk(KERN_INFO "[Mi_Driver_Proyecto] Transmisión completada con éxito. %zu bytes enviados en fragmentos de 1KB.\n", bytes_enviados);
+    // INYECCIÓN DEL MARCADOR DE FIN DE ARCHIVO
+    char *eof_msg = "FIN_TRANSMISION";
+    size_t eof_len = strlen(eof_msg);
     
-    /* 
-       Aquí el driver encapsulará estos bytes en un buffer 
-       y los inyectará directo al cable USB hacia la Raspberry Pi
-    */
-    
-    printk(KERN_INFO "[Mi_Driver_Proyecto] Bytes de la imagen listos en Kernel Space para ser enviados a la Pi.\n");
-    
-    kfree(kernel_buffer);
+    kernel_buffer = kmalloc(eof_len, GFP_KERNEL);
+    if (kernel_buffer) {
+        memcpy(kernel_buffer, eof_msg, eof_len);
+        skb = dev_alloc_skb(eof_len + LL_RESERVED_SPACE(dev));
+        if (skb) {
+            skb_reserve(skb, LL_RESERVED_SPACE(dev));
+            skb->dev = dev;
+            skb->protocol = htons(ETH_P_ALL);
+            data = skb_put(skb, eof_len);
+            memcpy(data, kernel_buffer, eof_len);
+            dev_queue_xmit(skb);
+        }
+        kfree(kernel_buffer);
+    }
+    dev_put(dev);
     return len;
 }
+
 
 // Estructura de operaciones de archivo (primitiva)
 static struct file_operations fops = {
