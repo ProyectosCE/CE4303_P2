@@ -34,10 +34,8 @@ int recv_all(int socket, void *buffer, size_t length)
 int main()
 {
     int server_fd;
-    int client_socket;
 
     struct sockaddr_in address;
-
     socklen_t addrlen = sizeof(address);
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -60,56 +58,89 @@ int main()
         return 1;
     }
 
-    listen(server_fd, 1);
+    listen(server_fd, 5);
 
     printf("Servidor esperando en puerto %d...\n", PORT);
 
-    client_socket = accept(server_fd,
-                           (struct sockaddr*)&address,
-                           &addrlen);
-
-    if(client_socket < 0)
+    while(1)
     {
-        perror("accept");
-        return 1;
+        int client_socket;
+
+        client_socket = accept(server_fd,
+                               (struct sockaddr*)&address,
+                               &addrlen);
+
+        if(client_socket < 0)
+        {
+            perror("accept");
+            continue;
+        }
+
+        printf("\nCliente conectado\n");
+
+        PBM_Image image;
+
+        // recibir width
+        if(recv_all(client_socket,
+                    &image.width,
+                    sizeof(int)) < 0)
+        {
+            printf("Error recibiendo width\n");
+            close(client_socket);
+            continue;
+        }
+
+        // recibir height
+        if(recv_all(client_socket,
+                    &image.height,
+                    sizeof(int)) < 0)
+        {
+            printf("Error recibiendo height\n");
+            close(client_socket);
+            continue;
+        }
+
+        printf("Imagen recibida:\n");
+        printf("Width  = %d\n", image.width);
+        printf("Height = %d\n", image.height);
+
+        // reservar memoria
+        image.columns = malloc(sizeof(uint32_t) * image.width);
+
+        if(image.columns == NULL)
+        {
+            printf("Error reservando memoria\n");
+            close(client_socket);
+            continue;
+        }
+
+        // recibir columnas
+        if(recv_all(client_socket,
+                    image.columns,
+                    sizeof(uint32_t) * image.width) < 0)
+        {
+            printf("Error recibiendo columnas\n");
+            free(image.columns);
+            close(client_socket);
+            continue;
+        }
+
+        printf("\nColumnas:\n");
+
+        for(int i = 0; i < image.width; i++)
+        {
+            printf("Column[%d] = 0x%08X\n",
+                   i,
+                   image.columns[i]);
+        }
+
+        free(image.columns);
+
+        printf("Cliente desconectado\n");
+
+        close(client_socket);
     }
 
-    PBM_Image image;
-
-    // recibir width
-    recv_all(client_socket,
-             &image.width,
-             sizeof(int));
-
-    // recibir height
-    recv_all(client_socket,
-             &image.height,
-             sizeof(int));
-
-    printf("Imagen recibida:\n");
-    printf("Width  = %d\n", image.width);
-    printf("Height = %d\n", image.height);
-
-    // reservar memoria
-    image.columns = malloc(sizeof(uint32_t) * image.width);
-
-    // recibir columnas
-    recv_all(client_socket,
-             image.columns,
-             sizeof(uint32_t) * image.width);
-
-    printf("\nColumnas:\n");
-
-    for(int i = 0; i < image.width; i++)
-    {
-        printf("Column[%d] = 0x%08X\n",
-               i,
-               image.columns[i]);
-    }
-
-    free(image.columns);
-
-    close(client_socket);
     close(server_fd);
 
     return 0;
