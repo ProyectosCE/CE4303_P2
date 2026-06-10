@@ -1,5 +1,5 @@
-#ifndef POV_CRYPTO_H
-#define POV_CRYPTO_H
+#ifndef CRYPTO_H
+#define CRYPTO_H
 
 #include <stdint.h>
 #include <stddef.h>
