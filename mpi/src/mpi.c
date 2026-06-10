@@ -30,6 +30,7 @@ Workers:
 #include "library_placeholder.h"
 
 #define OUTPUT_PACKET_FILE "driver_packet.bin"
+#define DECRYPTED_PBM_FILE "imagen_desc.pbm"
 
 /*
  * Colores del display.
@@ -346,6 +347,58 @@ static void process_rows_to_rgb(
     *checksum_out = checksum;
 }
 
+
+
+static int write_decrypted_pbm(
+    const char *filename,
+    uint32_t width,
+    uint32_t height,
+    uint32_t row_stride_bytes,
+    const uint8_t *plain_payload
+) {
+    FILE *fp = fopen(filename, "w");
+
+    if (fp == NULL) {
+        perror("fopen imagen_desc.pbm");
+        return -1;
+    }
+
+    fprintf(fp, "P1\n");
+    fprintf(fp, "%u %u\n", width, height);
+
+    for (uint32_t row = 0; row < height; row++) {
+
+        for (uint32_t col = 0; col < width; col++) {
+
+            uint64_t byte_index =
+                (uint64_t)row * row_stride_bytes +
+                (uint64_t)(col / 8u);
+
+            uint32_t bit_offset =
+                7u - (col % 8u);
+
+            uint8_t bit =
+                (plain_payload[byte_index] >> bit_offset) & 1u;
+
+            fprintf(fp, "%u", bit);
+
+            if (col + 1 < width) {
+                fputc(' ', fp);
+            }
+        }
+
+        fputc('\n', fp);
+    }
+
+    fclose(fp);
+
+    printf("\n[DEBUG PBM]\n");
+    printf("Imagen descifrada guardada en: %s\n", filename);
+
+    return 0;
+}
+
+
 static int run_master(
     int size,
     const char *input_file
@@ -356,6 +409,7 @@ static int run_master(
     printf("\nMASTER rank 0 running on %s\n", hostname);
     printf("Input file: %s\n", input_file);
     fflush(stdout);
+    double master_start_time = MPI_Wtime();
 
     BinHeader header;
     uint8_t *encrypted_payload = NULL;
@@ -394,6 +448,18 @@ static int run_master(
     }
 
     memset(final_rgb, 0, final_rgb_size);
+
+    uint8_t *final_plain_payload =
+    malloc(header.payload_size);
+
+    if (final_plain_payload == NULL) {
+        printf("ERROR: malloc final_plain_payload falló.\n");
+        free(final_rgb);
+        free(encrypted_payload);
+        return -1;
+    }
+
+    memset(final_plain_payload, 0, header.payload_size);
 
     uint32_t rows_per_worker =
         header.height / (uint32_t)workers_count;
@@ -553,6 +619,23 @@ static int run_master(
             );
         }
 
+        uint64_t plain_offset =
+            (uint64_t)start_row *
+            (uint64_t)header.row_stride_bytes;
+
+        uint64_t plain_size =
+            (uint64_t)row_count *
+            (uint64_t)header.row_stride_bytes;
+
+        if (plain_size > 0) {
+            mpi_recv_bytes(
+                final_plain_payload + plain_offset,
+                plain_size,
+                worker,
+                TAG_RESULT_PLAIN_PAYLOAD
+            );
+        }
+
         total_active_pixels += active_pixels;
         global_checksum ^= checksum;
 
@@ -574,6 +657,16 @@ static int run_master(
     printf("Global checksum     : 0x%016llX\n",
            (unsigned long long)global_checksum);
 
+    if (write_decrypted_pbm(
+            DECRYPTED_PBM_FILE,
+            header.width,
+            header.height,
+            header.row_stride_bytes,
+            final_plain_payload
+        ) < 0) {
+        printf("WARNING: no se pudo escribir imagen_desc.pbm\n");
+    }
+
     /*
      * El master no procesa imagen.
      * Solo entrega la matriz final ya ensamblada al placeholder de biblioteca.
@@ -587,10 +680,21 @@ static int run_master(
             final_rgb
         );
 
+    double master_end_time = MPI_Wtime();
+    double master_total_time = master_end_time - master_start_time;
+
+    printf("\n[TOTAL EXECUTION]\n");
+    printf("Master total time : %.6f s\n", master_total_time);
+    printf("Workers used      : %d\n", workers_count);
+    printf("Image size        : %u x %u\n", header.width, header.height);
+    printf("Cipher rounds     : %u\n", header.cipher_rounds);
+    printf("Payload bytes     : %u\n", header.payload_size);
+    printf("Output RGB bytes  : %llu\n",
+        (unsigned long long)final_rgb_size);
+
+    free(final_plain_payload);
     free(final_rgb);
     free(encrypted_payload);
-
-    return lib_result;
 }
 
 static int run_worker(int rank) {
@@ -785,6 +889,15 @@ static int run_worker(int rank) {
             rgb_size,
             0,
             TAG_RESULT_PAYLOAD
+        );
+    }
+
+    if (segment_size > 0) {
+        mpi_send_bytes(
+            plain_segment,
+            segment_size,
+            0,
+            TAG_RESULT_PLAIN_PAYLOAD
         );
     }
 

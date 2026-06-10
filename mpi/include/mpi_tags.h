@@ -11,5 +11,6 @@
 #define TAG_RESULT_META_U64     201
 #define TAG_RESULT_TIME         202
 #define TAG_RESULT_PAYLOAD      203
+#define TAG_RESULT_PLAIN_PAYLOAD 204
 
 #endif
