@@ -52,7 +52,7 @@ Workers:
  * El resultado visual no depende de este cálculo; se usa para generar carga
  * y una métrica checksum.
  */
-#define PIXEL_WORK_ROUNDS 24
+#define PIXEL_WORK_ROUNDS 2400
 
 static uint32_t read_u32_be(const uint8_t *buffer) {
     return
@@ -672,13 +672,23 @@ static int run_master(
      * Solo entrega la matriz final ya ensamblada al placeholder de biblioteca.
      */
     int lib_result =
-        pov_placeholder_write_frame(
-            OUTPUT_PACKET_FILE,
-            header.speed_ms,
-            header.width,
-            header.height,
-            final_rgb
-        );
+    pov_placeholder_write_frame(
+        OUTPUT_PACKET_FILE,
+        header.speed_ms,
+        header.width,
+        header.height,
+        final_rgb
+    );
+
+    if (lib_result < 0) {
+        printf("ERROR: fallo al generar el paquete del driver.\n");
+
+        free(final_plain_payload);
+        free(final_rgb);
+        free(encrypted_payload);
+
+        return -1;
+    }
 
     double master_end_time = MPI_Wtime();
     double master_total_time = master_end_time - master_start_time;
@@ -695,6 +705,8 @@ static int run_master(
     free(final_plain_payload);
     free(final_rgb);
     free(encrypted_payload);
+
+    return 0;
 }
 
 static int run_worker(int rank) {
