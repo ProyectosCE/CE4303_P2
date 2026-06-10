@@ -128,7 +128,6 @@ def pack_bits_by_rows(width, height, pixels):
 
     return bytes(payload), row_stride_bytes
 
-
 def xtea_encrypt_block(v0, v1, key, rounds):
     """
     Cifra un bloque de 64 bits usando XTEA.
@@ -137,23 +136,30 @@ def xtea_encrypt_block(v0, v1, key, rounds):
     En modo CTR, la misma operación sirve para cifrar y descifrar
     porque el payload se combina con XOR.
     """
-
     delta = 0x9E3779B9
     total = 0
 
     for _ in range(rounds):
         v0 = (
-            v0 + (
-                (((v1 << 4) & MASK32) ^ (v1 >> 5)) + v1
-            ) ^ (total + key[total & 3])
+            v0 +
+            (
+                (
+                    (((v1 << 4) & MASK32) ^ (v1 >> 5)) + v1
+                ) ^
+                ((total + key[total & 3]) & MASK32)
+            )
         ) & MASK32
 
         total = (total + delta) & MASK32
 
         v1 = (
-            v1 + (
-                (((v0 << 4) & MASK32) ^ (v0 >> 5)) + v0
-            ) ^ (total + key[(total >> 11) & 3])
+            v1 +
+            (
+                (
+                    (((v0 << 4) & MASK32) ^ (v0 >> 5)) + v0
+                ) ^
+                ((total + key[(total >> 11) & 3]) & MASK32)
+            )
         ) & MASK32
 
     return v0, v1
