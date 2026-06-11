@@ -19,6 +19,16 @@
 #define BLOCK_SIZE 1024
 #define CUSTOM_ETHERTYPE 0x88B5
 
+#define POV_FRAME_MAGIC 0x504F5631U /* ASCII: POV1 */
+#define POV_FRAME_TYPE_DATA 1
+#define POV_FRAME_TYPE_END  2
+
+struct pov_frame_header {
+    __be32 magic;
+    u8 type;
+    __be16 length;
+} __packed;
+
 static int major_number;
 static struct packet_type mi_packet_hook;
 
@@ -42,15 +52,26 @@ static struct net_device *find_target_dev(void)
     return found;
 }
 
-static int send_payload(struct net_device *dev, const void *payload, size_t payload_len)
+static int send_frame(
+    struct net_device *dev,
+    u8 frame_type,
+    const void *payload,
+    size_t payload_len
+)
 {
     struct sk_buff *skb;
     struct ethhdr *eth;
+    struct pov_frame_header *hdr;
     unsigned char *data;
+    unsigned int transport_len;
     unsigned int frame_len;
     int ret;
 
-    frame_len = ETH_HLEN + payload_len;
+    if (payload_len > 65535)
+        return -EINVAL;
+
+    transport_len = sizeof(struct pov_frame_header) + payload_len;
+    frame_len = ETH_HLEN + transport_len;
 
     skb = dev_alloc_skb(frame_len + LL_RESERVED_SPACE(dev));
     if (!skb)
@@ -61,7 +82,6 @@ static int send_payload(struct net_device *dev, const void *payload, size_t payl
     skb->dev = dev;
 
     eth = skb_put(skb, ETH_HLEN);
-
     eth_broadcast_addr(eth->h_dest);
     ether_addr_copy(eth->h_source, dev->dev_addr);
     eth->h_proto = htons(CUSTOM_ETHERTYPE);
@@ -69,8 +89,15 @@ static int send_payload(struct net_device *dev, const void *payload, size_t payl
     skb->protocol = eth->h_proto;
     skb_reset_mac_header(skb);
 
-    data = skb_put(skb, payload_len);
-    memcpy(data, payload, payload_len);
+    hdr = skb_put(skb, sizeof(struct pov_frame_header));
+    hdr->magic = cpu_to_be32(POV_FRAME_MAGIC);
+    hdr->type = frame_type;
+    hdr->length = cpu_to_be16((u16)payload_len);
+
+    if (payload_len > 0) {
+        data = skb_put(skb, payload_len);
+        memcpy(data, payload, payload_len);
+    }
 
     ret = dev_queue_xmit(skb);
 
@@ -91,7 +118,7 @@ static ssize_t driver_write(
     char *kernel_buffer;
     size_t bytes_sent = 0;
     int ret = 0;
-    static const char eof_msg[] = "FIN_TRANSMISION";
+    
 
     pr_info("[Mi_Driver_Proyecto] Tamaño solicitado: %zu bytes\n", len);
 
@@ -119,7 +146,7 @@ static ssize_t driver_write(
             break;
         }
 
-        ret = send_payload(dev, kernel_buffer, chunk_size);
+        ret = send_frame(dev, POV_FRAME_TYPE_DATA, kernel_buffer, chunk_size);
         if (ret < 0)
             break;
 
@@ -129,9 +156,9 @@ static ssize_t driver_write(
     }
 
     if (ret == 0) {
-        ret = send_payload(dev, eof_msg, sizeof(eof_msg) - 1);
+        ret = send_frame(dev, POV_FRAME_TYPE_END, eof_msg, sizeof(eof_msg) - 1);
         if (ret < 0)
-            pr_warn("[Mi_Driver_Proyecto] No se pudo enviar marcador EOF.\n");
+            pr_warn("[Mi_Driver_Proyecto] No se pudo enviar frame EOF.\n");
     }
 
     kfree(kernel_buffer);

@@ -1,209 +1,374 @@
-/**
- * @file receptor.c
- * @brief Programa receptor para captura de imagen transmitida por red USB-Ethernet.
- *
- * @details
- * Este programa actúa como servidor receptor en una Raspberry Pi, capturando tráfico
- * a nivel de enlace (raw packets) desde un socket AF_PACKET. Escucha paquetes crudos
- * en la interfaz USB, valida marcadores de inicio/fin de transmisión (PNG magic header
- * y marcador explícito "FIN_TRANSMISION"), filtra los encabezados de enlace y reconstruye
- * el archivo de imagen original en disco.
- *
- * @details
- * Flujo de operación:
- * - Crea un socket raw AF_PACKET para captura a nivel de enlace (ETH_P_ALL).
- * - Se vincula a la interfaz USB especificada (usb0).
- * - Entra en bucle de escucha bloqueante (recvfrom).
- * - Por cada paquete recibido: valida EOF, busca firma PNG, elimina headers L2 (14 bytes),
- *   escribe datos al archivo.
- * - Al recibir el marcador "FIN_TRANSMISION", termina la captura.
- *
- * @warning
- * Requiere permisos de root para crear sockets AF_PACKET.
- * Los paquetes se asumen fragmentados en ráfagas de ~1024 bytes del lado transmisor.
- */
-
+#include <arpa/inet.h>
+#include <errno.h>
+#include <linux/if_ether.h>
+#include <linux/if_packet.h>
+#include <net/if.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <unistd.h>
-#include <arpa/inet.h>       /**< Definiciones de orden de bytes de red. */
-#include <sys/socket.h>      /**< API de sockets (socket(), bind(), recvfrom()). */
-#include <linux/if_packet.h> /**< Definiciones AF_PACKET para captura L2. */
-#include <net/ethernet.h>    /**< Constantes de Ethernet. */
-#include <net/if.h>          /**< Estructuras y helpers de interfaces de red. */
-#include <sys/ioctl.h>       /**< Llamadas ioctl() para configuración de dispositivos. */
 
-/**
- * @def INTERFAZ_PI
- * @brief Nombre de la interfaz de red USB donde se capturará el tráfico.
- */
-#define INTERFAZ_PI "usb0"
+#define DEFAULT_USB_INTERFACE "usb0"
+#define DEFAULT_PICO_PORT 5001
 
-/**
- * @def ARCHIVO_SALIDA
- * @brief Ruta relativa del archivo donde se guardará la imagen reconstruida.
- */
-#define ARCHIVO_SALIDA "imagen_recibida_otg.png"
+#define CUSTOM_ETHERTYPE 0x88B5
 
-/**
- * @def MAX_BUFFER
- * @brief Tamaño máximo del buffer para almacenar un paquete capturado.
- */
-#define MAX_BUFFER 150000
+#define POV_FRAME_MAGIC 0x504F5631U /* ASCII: POV1 */
+#define POV_FRAME_TYPE_DATA 1
+#define POV_FRAME_TYPE_END  2
 
-/**
- * @brief Programa principal: inicializa socket raw, captura tráfico y reconstruye imagen.
- *
- * @details
- * Implementa el flujo completo de recepción:
- * 1. Crear un socket AF_PACKET en modo raw (SOCK_RAW con ETH_P_ALL).
- * 2. Obtener el índice de interfaz de la estructura ifreq usando ioctl().
- * 3. Vincular (bind) el socket a dicha interfaz mediante sockaddr_ll.
- * 4. Abrir archivo de salida en modo binario ("wb") para escritura.
- * 5. Bucle de captura (recvfrom):
- *    - Detecta marcador EOF explícito ("FIN_TRANSMISION").
- *    - En el primer paquete válido (>=1000 bytes): busca firma PNG (0x89 0x50 0x4E 0x47).
- *    - En paquetes subsecuentes: salta 14 bytes de header Ethernet y escribe datos.
- * 6. Cierra archivo, socket y libera memoria.
- * 7. Reporta estadísticas (bytes totales, ruta de archivo).
- *
- * @return 0 en éxito, 1 en error (inicialización o fallo I/O).
- */
-int main() {
-    int sock_raw;                         /**< Descriptor de socket raw AF_PACKET. */
-    struct sockaddr_ll sll;               /**< Dirección de socket a nivel de enlace. */
-    struct ifreq ifr;                     /**< Estructura para ioctl() de interfaces. */
-    unsigned char *buffer = malloc(MAX_BUFFER); /**< Buffer de recepción para paquetes crudos. */
-    FILE *fp;                             /**< Descriptor de archivo para guardar imagen. */
-    
-    printf("RASPBERRY PI: RECEPTOR \n");
+#define NUM_LEDS 9
+#define RGB_BYTES 3
+#define COLUMN_BYTES (NUM_LEDS * RGB_BYTES)
 
-    /** @brief Crear socket raw para captura a nivel de enlace (Ethernet). */
-    sock_raw = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-    if (sock_raw < 0) {
-        perror("[Error] No se pudo abrir el socket crudo de hardware");
-        free(buffer);
-        return 1;
+#define MAX_FRAME_SIZE 2048
+#define MAX_POV_PACKET_SIZE (512 * 1024)
+
+struct pov_frame_header {
+    uint32_t magic_be;
+    uint8_t type;
+    uint16_t length_be;
+} __attribute__((packed));
+
+struct dynamic_buffer {
+    uint8_t *data;
+    size_t size;
+    size_t capacity;
+};
+
+static void buffer_reset(struct dynamic_buffer *buffer)
+{
+    buffer->size = 0;
+}
+
+static void buffer_free(struct dynamic_buffer *buffer)
+{
+    free(buffer->data);
+    buffer->data = NULL;
+    buffer->size = 0;
+    buffer->capacity = 0;
+}
+
+static int buffer_append(struct dynamic_buffer *buffer, const uint8_t *data, size_t len)
+{
+    uint8_t *new_data;
+    size_t new_capacity;
+
+    if (len == 0)
+        return 0;
+
+    if (buffer->size + len > MAX_POV_PACKET_SIZE) {
+        fprintf(stderr, "[Error] Paquete POV excede el máximo permitido: %d bytes\n",
+                MAX_POV_PACKET_SIZE);
+        return -1;
     }
 
-    /** @brief Obtener índice de interfaz mediante ioctl(SIOCGIFINDEX). */
+    if (buffer->size + len <= buffer->capacity) {
+        memcpy(buffer->data + buffer->size, data, len);
+        buffer->size += len;
+        return 0;
+    }
+
+    new_capacity = buffer->capacity == 0 ? 4096 : buffer->capacity;
+
+    while (new_capacity < buffer->size + len)
+        new_capacity *= 2;
+
+    new_data = realloc(buffer->data, new_capacity);
+    if (!new_data) {
+        perror("[Error] realloc");
+        return -1;
+    }
+
+    buffer->data = new_data;
+    buffer->capacity = new_capacity;
+
+    memcpy(buffer->data + buffer->size, data, len);
+    buffer->size += len;
+
+    return 0;
+}
+
+static int open_raw_receiver(const char *interface_name)
+{
+    int sockfd;
+    struct ifreq ifr;
+    struct sockaddr_ll sll;
+
+    sockfd = socket(AF_PACKET, SOCK_RAW, htons(CUSTOM_ETHERTYPE));
+    if (sockfd < 0) {
+        perror("[Error] socket(AF_PACKET)");
+        return -1;
+    }
+
     memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, INTERFAZ_PI, IFNAMSIZ - 1);
-    if (ioctl(sock_raw, SIOCGIFINDEX, &ifr) < 0) {
-        perror("[Error] No se encontró la interfaz física USB");
-        close(sock_raw);
-        free(buffer);
-        return 1;
+    strncpy(ifr.ifr_name, interface_name, IFNAMSIZ - 1);
+
+    if (ioctl(sockfd, SIOCGIFINDEX, &ifr) < 0) {
+        perror("[Error] SIOCGIFINDEX");
+        close(sockfd);
+        return -1;
     }
 
-    /** @brief Configurar estructura de dirección y vincular socket a la interfaz. */
     memset(&sll, 0, sizeof(sll));
     sll.sll_family = AF_PACKET;
     sll.sll_ifindex = ifr.ifr_ifindex;
-    sll.sll_protocol = htons(ETH_P_ALL);
+    sll.sll_protocol = htons(CUSTOM_ETHERTYPE);
 
-    if (bind(sock_raw, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
-        perror("[Error] Falló el enlace de hardware al puerto");
-        close(sock_raw);
-        free(buffer);
+    if (bind(sockfd, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
+        perror("[Error] bind(AF_PACKET)");
+        close(sockfd);
+        return -1;
+    }
+
+    return sockfd;
+}
+
+static int send_all(int sockfd, const uint8_t *data, size_t len)
+{
+    size_t sent = 0;
+
+    while (sent < len) {
+        ssize_t n = send(sockfd, data + sent, len - sent, 0);
+
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+
+            perror("[Error] send");
+            return -1;
+        }
+
+        if (n == 0) {
+            fprintf(stderr, "[Error] send retornó 0\n");
+            return -1;
+        }
+
+        sent += (size_t)n;
+    }
+
+    return 0;
+}
+
+static int forward_to_pico(const char *pico_ip, uint16_t pico_port, const uint8_t *data, size_t len)
+{
+    int sockfd;
+    struct sockaddr_in addr;
+
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        perror("[Error] socket(AF_INET)");
+        return -1;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(pico_port);
+
+    if (inet_pton(AF_INET, pico_ip, &addr.sin_addr) != 1) {
+        fprintf(stderr, "[Error] IP de Pico inválida: %s\n", pico_ip);
+        close(sockfd);
+        return -1;
+    }
+
+    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("[Error] connect hacia Pico");
+        close(sockfd);
+        return -1;
+    }
+
+    if (send_all(sockfd, data, len) < 0) {
+        close(sockfd);
+        return -1;
+    }
+
+    /*
+     * La Pico lee hasta que recv() retorna vacío.
+     * shutdown(SHUT_WR) ayuda a indicar fin de transmisión.
+     */
+    shutdown(sockfd, SHUT_WR);
+    close(sockfd);
+
+    return 0;
+}
+
+static int validate_pico_packet(const uint8_t *data, size_t len)
+{
+    size_t matrix_len;
+    size_t columns;
+    uint16_t speed_ms;
+
+    if (len < 2 + COLUMN_BYTES) {
+        fprintf(stderr,
+                "[Error] Paquete demasiado pequeño. Mínimo: %d bytes, recibido: %zu\n",
+                2 + COLUMN_BYTES,
+                len);
+        return -1;
+    }
+
+    matrix_len = len - 2;
+
+    if (matrix_len % COLUMN_BYTES != 0) {
+        fprintf(stderr,
+                "[Error] Tamaño de matriz inválido. len-2 debe ser múltiplo de %d. Recibido: %zu\n",
+                COLUMN_BYTES,
+                matrix_len);
+        return -1;
+    }
+
+    speed_ms = ((uint16_t)data[0] << 8) | data[1];
+    columns = matrix_len / COLUMN_BYTES;
+
+    printf("[OK] Paquete compatible con Pico\n");
+    printf("     Velocidad: %u ms\n", speed_ms);
+    printf("     Columnas:  %zu\n", columns);
+    printf("     LEDs/col:  %d\n", NUM_LEDS);
+    printf("     Total:     %zu bytes\n", len);
+
+    return 0;
+}
+
+static int process_raw_frame(
+    const uint8_t *frame,
+    ssize_t frame_size,
+    struct dynamic_buffer *rx_buffer,
+    const char *pico_ip,
+    uint16_t pico_port
+)
+{
+    const struct ethhdr *eth;
+    const uint8_t *payload;
+    size_t payload_len;
+    struct pov_frame_header header;
+    uint32_t magic;
+    uint16_t chunk_len;
+
+    if (frame_size < ETH_HLEN + (ssize_t)sizeof(struct pov_frame_header))
+        return 0;
+
+    eth = (const struct ethhdr *)frame;
+
+    if (ntohs(eth->h_proto) != CUSTOM_ETHERTYPE)
+        return 0;
+
+    payload = frame + ETH_HLEN;
+    payload_len = (size_t)frame_size - ETH_HLEN;
+
+    memcpy(&header, payload, sizeof(header));
+
+    magic = ntohl(header.magic_be);
+    chunk_len = ntohs(header.length_be);
+
+    if (magic != POV_FRAME_MAGIC) {
+        fprintf(stderr, "[Warn] Frame con EtherType correcto pero magic inválido\n");
+        return 0;
+    }
+
+    if (sizeof(struct pov_frame_header) + chunk_len > payload_len) {
+        fprintf(stderr,
+                "[Warn] Frame incompleto. payload_len=%zu, chunk_len=%u\n",
+                payload_len,
+                chunk_len);
+        return 0;
+    }
+
+    payload += sizeof(struct pov_frame_header);
+
+    if (header.type == POV_FRAME_TYPE_DATA) {
+        if (buffer_append(rx_buffer, payload, chunk_len) < 0) {
+            buffer_reset(rx_buffer);
+            return -1;
+        }
+
+        printf("[RX] Fragmento DATA: %u bytes. Acumulado: %zu bytes\n",
+               chunk_len,
+               rx_buffer->size);
+
+        return 0;
+    }
+
+    if (header.type == POV_FRAME_TYPE_END) {
+        printf("[RX] Frame END recibido. Paquete completo: %zu bytes\n", rx_buffer->size);
+
+        if (validate_pico_packet(rx_buffer->data, rx_buffer->size) == 0) {
+            if (forward_to_pico(pico_ip, pico_port, rx_buffer->data, rx_buffer->size) == 0) {
+                printf("[OK] Paquete reenviado a Pico %s:%u\n", pico_ip, pico_port);
+            } else {
+                fprintf(stderr, "[Error] No se pudo reenviar a la Pico\n");
+            }
+        } else {
+            fprintf(stderr, "[Error] Paquete descartado por formato incompatible\n");
+        }
+
+        buffer_reset(rx_buffer);
+        return 0;
+    }
+
+    fprintf(stderr, "[Warn] Tipo de frame desconocido: %u\n", header.type);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    const char *interface_name = DEFAULT_USB_INTERFACE;
+    const char *pico_ip;
+    uint16_t pico_port = DEFAULT_PICO_PORT;
+    int raw_sock;
+    uint8_t frame[MAX_FRAME_SIZE];
+    struct dynamic_buffer rx_buffer = {0};
+
+    if (argc < 2) {
+        fprintf(stderr, "Uso:\n");
+        fprintf(stderr, "  sudo %s <pico_ip> [interfaz_usb] [puerto]\n", argv[0]);
+        fprintf(stderr, "\nEjemplo:\n");
+        fprintf(stderr, "  sudo %s 192.168.1.80 usb0 5001\n", argv[0]);
         return 1;
     }
 
-    printf("Escuchando bytes crudos en el puerto USB (%s)...\n", INTERFAZ_PI);
+    pico_ip = argv[1];
 
-    /** @brief Abrir archivo de salida en modo binario escritura. */
-    fp = fopen(ARCHIVO_SALIDA, "wb");
-    if (!fp) {
-        perror("[Error] No se pudo crear el archivo de imagen");
-        close(sock_raw);
-        free(buffer);
-        return 1;
+    if (argc >= 3)
+        interface_name = argv[2];
+
+    if (argc >= 4) {
+        int port = atoi(argv[3]);
+        if (port <= 0 || port > 65535) {
+            fprintf(stderr, "[Error] Puerto inválido: %s\n", argv[3]);
+            return 1;
+        }
+        pico_port = (uint16_t)port;
     }
 
-    size_t total_bytes_recibidos = 0;  /**< Acumulador de bytes válidos guardados en disco. */
-    int esperando = 1;                  /**< Flag de control del bucle principal. */
-    int cabecera_encontrada = 0;        /**< Flag: se localizó la firma PNG válida. */
+    printf("RASPBERRY PI 4: receptor puente USB-Ethernet -> Pico TCP\n");
+    printf("Interfaz USB: %s\n", interface_name);
+    printf("Pico destino: %s:%u\n", pico_ip, pico_port);
+    printf("EtherType:    0x%04X\n", CUSTOM_ETHERTYPE);
 
-    /** @brief Bucle de captura bloqueante: recvfrom() + procesamiento de paquetes. */
-    while (esperando) {
-        ssize_t packet_size = recvfrom(sock_raw, buffer, MAX_BUFFER, 0, NULL, NULL);
-        if (packet_size < 0) {
-            perror("[Error] Falló la lectura de ráfaga física");
+    raw_sock = open_raw_receiver(interface_name);
+    if (raw_sock < 0)
+        return 1;
+
+    printf("Escuchando frames POV...\n");
+
+    while (1) {
+        ssize_t frame_size = recvfrom(raw_sock, frame, sizeof(frame), 0, NULL, NULL);
+
+        if (frame_size < 0) {
+            if (errno == EINTR)
+                continue;
+
+            perror("[Error] recvfrom");
             break;
         }
 
-        if (packet_size > 0) {
-            
-            /**
-             * @brief Validación explícita de marcador de fin de transmisión.
-             *
-             * Itera sobre el buffer buscando la cadena ASCII "FIN_TRANSMISION" (15 bytes).
-             * Si se encuentra, marca fin de bucle.
-             */
-            int encontrado_eof = 0;
-            for (int i = 0; i <= packet_size - 15; i++) {
-                if (memcmp(buffer + i, "FIN_TRANSMISION", 15) == 0) {
-                    encontrado_eof = 1;
-                    break;
-                }
-            }
-
-            if (encontrado_eof) {
-                printf("-> ¡Marcador de cierre explícito detectado! Finalizando escucha.\n");
-                fflush(stdout);
-                esperando = 0;
-                continue; 
-            }
-
-            /**
-             * @brief Filtro de paquetes: validación por tamaño y detección de firma PNG.
-             *
-             * Solo procesa paquetes con payload >= 1000 bytes (fragmentos significativos).
-             * En el primer paquete válido: busca la firma mágica PNG (0x89 0x50 0x4E 0x47).
-             * En paquetes subsecuentes: salta los 14 bytes de header Ethernet y escribe datos.
-             */
-            if (packet_size >= 1000) {
-                unsigned char *inicio_datos = buffer; /**< Puntero de inicio del payload útil. */
-                ssize_t tamano_datos = packet_size;   /**< Tamaño del payload a escribir. */
-
-                /** @brief Búsqueda de firma PNG en primer paquete válido. */
-                if (!cabecera_encontrada) {
-                    for (int i = 0; i <= packet_size - 4; i++) {
-                        if (buffer[i] == 0x89 && buffer[i+1] == 0x50 && buffer[i+2] == 0x4E && buffer[i+3] == 0x47) {
-                            inicio_datos = buffer + i;
-                            tamano_datos = packet_size - i;
-                            cabecera_encontrada = 1;
-                            printf("-> ¡Cabecera PNG válida detectada en el byte offset %d!\n", i);
-                            break;
-                        }
-                    }
-                } else {
-                    /** @brief Paquetes posteriores: omitir encabezado Ethernet (14 bytes fijos). */
-                    inicio_datos = buffer + 14;
-                    tamano_datos = packet_size - 14;
-                }
-
-                if (cabecera_encontrada && tamano_datos > 0) {
-                    printf("-> Ráfaga física capturada: %ld bytes escritos en disco.\n", tamano_datos);
-                    fflush(stdout); 
-                    
-                    /** @brief Escribir fragmento validado al archivo de imagen. */
-                    fwrite(inicio_datos, 1, tamano_datos, fp);
-                    total_bytes_recibidos += tamano_datos;
-                }
-            }
-        }
+        process_raw_frame(frame, frame_size, &rx_buffer, pico_ip, pico_port);
     }
 
-    /** @brief Cierre limpio de recursos: archivo, socket y memoria dinámica. */
-    fclose(fp);
-    close(sock_raw);
-    free(buffer);
-
-    printf("¡ÉXITO! Imagen reconstruida en C de forma cruda por USB.\n");
-    printf("Archivo guardado en la Pi como: %s\n", ARCHIVO_SALIDA);
-    printf("Tamaño total guardado en disco: %zu bytes\n", total_bytes_recibidos);
+    buffer_free(&rx_buffer);
+    close(raw_sock);
 
     return 0;
 }

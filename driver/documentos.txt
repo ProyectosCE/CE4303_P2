@@ -1,0 +1,20 @@
+sudo insmod ./mi_driver.ko
+dmesg | tail -n 30
+lsmod
+# variable:
+sudo mknod /dev/raspberry_usb c 234 0
+sudo chmod 666 /dev/raspberry_usb
+ls -l /dev/raspberry_usb
+ip link | grep enx
+echo "hola desde driver" > /dev/raspberry_usb
+sudo dmesg | tail -n 30
+
+
+#para ver la interfaz:
+ip link
+ip a
+
+# Para usar raspberrry.local en ssh
+sudo apt update
+sudo apt install avahi-daemon avahi-utils libnss-mdns
+sudo systemctl enable --now avahi-daemon
