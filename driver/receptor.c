@@ -10,6 +10,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <ctype.h>
 
 #define DEFAULT_USB_INTERFACE "usb0"
 #define DEFAULT_PICO_PORT 5001
@@ -39,6 +40,45 @@ struct dynamic_buffer {
     size_t capacity;
 };
 
+enum receiver_mode {
+    MODE_NORMAL = 1,
+    MODE_TEST_TXT,
+    MODE_TEST_FRAME
+};
+
+struct receiver_config {
+    enum receiver_mode mode;
+    const char *interface_name;
+    const char *pico_ip;
+    uint16_t pico_port;
+};
+
+static void print_usage(const char *program_name)
+{
+    fprintf(stderr, "Uso:\n");
+    fprintf(stderr, "  sudo %s normal <IP_PICO> [interfaz_usb] [puerto]\n", program_name);
+    fprintf(stderr, "  sudo %s txt [interfaz_usb]\n", program_name);
+    fprintf(stderr, "  sudo %s frame [interfaz_usb]\n", program_name);
+    fprintf(stderr, "\nEjemplos:\n");
+    fprintf(stderr, "  sudo %s normal 192.168.1.80 usb0 5001\n", program_name);
+    fprintf(stderr, "  sudo %s txt usb0\n", program_name);
+    fprintf(stderr, "  sudo %s frame usb0\n", program_name);
+}
+
+static const char *mode_to_string(enum receiver_mode mode)
+{
+    switch (mode) {
+        case MODE_NORMAL:
+            return "normal";
+        case MODE_TEST_TXT:
+            return "prueba txt";
+        case MODE_TEST_FRAME:
+            return "prueba frame";
+        default:
+            return "desconocido";
+    }
+}
+
 static void buffer_reset(struct dynamic_buffer *buffer)
 {
     buffer->size = 0;
@@ -61,7 +101,7 @@ static int buffer_append(struct dynamic_buffer *buffer, const uint8_t *data, siz
         return 0;
 
     if (buffer->size + len > MAX_POV_PACKET_SIZE) {
-        fprintf(stderr, "[Error] Paquete POV excede el máximo permitido: %d bytes\n",
+        fprintf(stderr, "[Error] Paquete excede el máximo permitido: %d bytes\n",
                 MAX_POV_PACKET_SIZE);
         return -1;
     }
@@ -90,6 +130,56 @@ static int buffer_append(struct dynamic_buffer *buffer, const uint8_t *data, siz
     buffer->size += len;
 
     return 0;
+}
+
+static void print_hex_dump(const uint8_t *data, size_t len)
+{
+    size_t i;
+    size_t j;
+
+    for (i = 0; i < len; i += 16) {
+        printf("%08zx  ", i);
+
+        for (j = 0; j < 16; j++) {
+            if (i + j < len)
+                printf("%02x ", data[i + j]);
+            else
+                printf("   ");
+        }
+
+        printf(" |");
+
+        for (j = 0; j < 16 && i + j < len; j++) {
+            unsigned char c = data[i + j];
+            printf("%c", isprint(c) ? c : '.');
+        }
+
+        printf("|\n");
+    }
+}
+
+static void print_text_payload(const uint8_t *data, size_t len)
+{
+    size_t i;
+
+    printf("----- TEXTO RECIBIDO (%zu bytes) -----\n", len);
+
+    for (i = 0; i < len; i++) {
+        unsigned char c = data[i];
+
+        if (c == '\n' || c == '\r' || c == '\t') {
+            putchar(c);
+        } else if (isprint(c)) {
+            putchar(c);
+        } else {
+            printf("\\x%02x", c);
+        }
+    }
+
+    if (len == 0 || data[len - 1] != '\n')
+        putchar('\n');
+
+    printf("--------------------------------------\n");
 }
 
 static int open_raw_receiver(const char *interface_name)
@@ -185,10 +275,6 @@ static int forward_to_pico(const char *pico_ip, uint16_t pico_port, const uint8_
         return -1;
     }
 
-    /*
-     * La Pico lee hasta que recv() retorna vacío.
-     * shutdown(SHUT_WR) ayuda a indicar fin de transmisión.
-     */
     shutdown(sockfd, SHUT_WR);
     close(sockfd);
 
@@ -231,12 +317,59 @@ static int validate_pico_packet(const uint8_t *data, size_t len)
     return 0;
 }
 
+static void process_complete_message(
+    const struct receiver_config *config,
+    struct dynamic_buffer *rx_buffer
+)
+{
+    if (config->mode == MODE_TEST_TXT) {
+        print_text_payload(rx_buffer->data, rx_buffer->size);
+        buffer_reset(rx_buffer);
+        return;
+    }
+
+    if (config->mode == MODE_TEST_FRAME) {
+        printf("----- FRAME BINARIO RECONSTRUIDO (%zu bytes) -----\n", rx_buffer->size);
+        print_hex_dump(rx_buffer->data, rx_buffer->size);
+
+        /*
+         * En modo prueba frame no se envía a la Pico.
+         * Solo se intenta validar para informar si parece paquete POV válido.
+         */
+        validate_pico_packet(rx_buffer->data, rx_buffer->size);
+
+        printf("--------------------------------------------------\n");
+
+        buffer_reset(rx_buffer);
+        return;
+    }
+
+    if (config->mode == MODE_NORMAL) {
+        if (validate_pico_packet(rx_buffer->data, rx_buffer->size) == 0) {
+            if (forward_to_pico(config->pico_ip,
+                                config->pico_port,
+                                rx_buffer->data,
+                                rx_buffer->size) == 0) {
+                printf("[OK] Paquete reenviado a Pico %s:%u\n",
+                       config->pico_ip,
+                       config->pico_port);
+            } else {
+                fprintf(stderr, "[Error] No se pudo reenviar a la Pico\n");
+            }
+        } else {
+            fprintf(stderr, "[Error] Paquete descartado por formato incompatible\n");
+        }
+
+        buffer_reset(rx_buffer);
+        return;
+    }
+}
+
 static int process_raw_frame(
     const uint8_t *frame,
     ssize_t frame_size,
     struct dynamic_buffer *rx_buffer,
-    const char *pico_ip,
-    uint16_t pico_port
+    const struct receiver_config *config
 )
 {
     const struct ethhdr *eth;
@@ -264,6 +397,12 @@ static int process_raw_frame(
 
     if (magic != POV_FRAME_MAGIC) {
         fprintf(stderr, "[Warn] Frame con EtherType correcto pero magic inválido\n");
+
+        if (config->mode == MODE_TEST_FRAME) {
+            printf("[Debug] Payload recibido sin magic válido (%zu bytes):\n", payload_len);
+            print_hex_dump(payload, payload_len);
+        }
+
         return 0;
     }
 
@@ -283,27 +422,21 @@ static int process_raw_frame(
             return -1;
         }
 
-        printf("[RX] Fragmento DATA: %u bytes. Acumulado: %zu bytes\n",
+        printf("[RX] DATA: chunk=%u bytes, acumulado=%zu bytes\n",
                chunk_len,
                rx_buffer->size);
+
+        if (config->mode == MODE_TEST_FRAME) {
+            printf("[Debug] Chunk DATA en hexadecimal:\n");
+            print_hex_dump(payload, chunk_len);
+        }
 
         return 0;
     }
 
     if (header.type == POV_FRAME_TYPE_END) {
-        printf("[RX] Frame END recibido. Paquete completo: %zu bytes\n", rx_buffer->size);
-
-        if (validate_pico_packet(rx_buffer->data, rx_buffer->size) == 0) {
-            if (forward_to_pico(pico_ip, pico_port, rx_buffer->data, rx_buffer->size) == 0) {
-                printf("[OK] Paquete reenviado a Pico %s:%u\n", pico_ip, pico_port);
-            } else {
-                fprintf(stderr, "[Error] No se pudo reenviar a la Pico\n");
-            }
-        } else {
-            fprintf(stderr, "[Error] Paquete descartado por formato incompatible\n");
-        }
-
-        buffer_reset(rx_buffer);
+        printf("[RX] END recibido. Mensaje completo: %zu bytes\n", rx_buffer->size);
+        process_complete_message(config, rx_buffer);
         return 0;
     }
 
@@ -311,47 +444,97 @@ static int process_raw_frame(
     return 0;
 }
 
+static int parse_config(int argc, char **argv, struct receiver_config *config)
+{
+    memset(config, 0, sizeof(*config));
+
+    config->interface_name = DEFAULT_USB_INTERFACE;
+    config->pico_ip = NULL;
+    config->pico_port = DEFAULT_PICO_PORT;
+
+    if (argc < 2)
+        return -1;
+
+    if (strcmp(argv[1], "normal") == 0) {
+        int port;
+
+        if (argc < 3)
+            return -1;
+
+        config->mode = MODE_NORMAL;
+        config->pico_ip = argv[2];
+
+        if (argc >= 4)
+            config->interface_name = argv[3];
+
+        if (argc >= 5) {
+            port = atoi(argv[4]);
+            if (port <= 0 || port > 65535) {
+                fprintf(stderr, "[Error] Puerto inválido: %s\n", argv[4]);
+                return -1;
+            }
+
+            config->pico_port = (uint16_t)port;
+        }
+
+        return 0;
+    }
+
+    if (strcmp(argv[1], "txt") == 0) {
+        config->mode = MODE_TEST_TXT;
+
+        if (argc >= 3)
+            config->interface_name = argv[2];
+
+        return 0;
+    }
+
+    if (strcmp(argv[1], "frame") == 0) {
+        config->mode = MODE_TEST_FRAME;
+
+        if (argc >= 3)
+            config->interface_name = argv[2];
+
+        return 0;
+    }
+
+    return -1;
+}
+
 int main(int argc, char **argv)
 {
-    const char *interface_name = DEFAULT_USB_INTERFACE;
-    const char *pico_ip;
-    uint16_t pico_port = DEFAULT_PICO_PORT;
+    struct receiver_config config;
     int raw_sock;
     uint8_t frame[MAX_FRAME_SIZE];
     struct dynamic_buffer rx_buffer = {0};
 
-    if (argc < 2) {
-        fprintf(stderr, "Uso:\n");
-        fprintf(stderr, "  sudo %s <pico_ip> [interfaz_usb] [puerto]\n", argv[0]);
-        fprintf(stderr, "\nEjemplo:\n");
-        fprintf(stderr, "  sudo %s 192.168.1.80 usb0 5001\n", argv[0]);
+    if (parse_config(argc, argv, &config) < 0) {
+        print_usage(argv[0]);
         return 1;
     }
 
-    pico_ip = argv[1];
-
-    if (argc >= 3)
-        interface_name = argv[2];
-
-    if (argc >= 4) {
-        int port = atoi(argv[3]);
-        if (port <= 0 || port > 65535) {
-            fprintf(stderr, "[Error] Puerto inválido: %s\n", argv[3]);
-            return 1;
-        }
-        pico_port = (uint16_t)port;
-    }
-
-    printf("RASPBERRY PI 4: receptor puente USB-Ethernet -> Pico TCP\n");
-    printf("Interfaz USB: %s\n", interface_name);
-    printf("Pico destino: %s:%u\n", pico_ip, pico_port);
+    printf("==========================================================\n");
+    printf("     RASPBERRY PI 4: RECEPTOR USB-ETHERNET POV\n");
+    printf("==========================================================\n");
+    printf("Modo:         %s\n", mode_to_string(config.mode));
+    printf("Interfaz USB: %s\n", config.interface_name);
     printf("EtherType:    0x%04X\n", CUSTOM_ETHERTYPE);
 
-    raw_sock = open_raw_receiver(interface_name);
+    if (config.mode == MODE_NORMAL) {
+        printf("Pico destino: %s:%u\n", config.pico_ip, config.pico_port);
+    } else if (config.mode == MODE_TEST_TXT) {
+        printf("Destino Pico: deshabilitado\n");
+        printf("Salida:       texto reconstruido\n");
+    } else if (config.mode == MODE_TEST_FRAME) {
+        printf("Destino Pico: deshabilitado\n");
+        printf("Salida:       hexadecimal de frames binarios\n");
+    }
+
+    raw_sock = open_raw_receiver(config.interface_name);
     if (raw_sock < 0)
         return 1;
 
-    printf("Escuchando frames POV...\n");
+    printf("Escuchando frames POV en %s...\n", config.interface_name);
 
     while (1) {
         ssize_t frame_size = recvfrom(raw_sock, frame, sizeof(frame), 0, NULL, NULL);
@@ -364,7 +547,7 @@ int main(int argc, char **argv)
             break;
         }
 
-        process_raw_frame(frame, frame_size, &rx_buffer, pico_ip, pico_port);
+        process_raw_frame(frame, frame_size, &rx_buffer, &config);
     }
 
     buffer_free(&rx_buffer);
