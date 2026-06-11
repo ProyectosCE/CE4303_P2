@@ -118,7 +118,7 @@ static ssize_t driver_write(
     char *kernel_buffer;
     size_t bytes_sent = 0;
     int ret = 0;
-    
+
 
     pr_info("[Mi_Driver_Proyecto] Tamaño solicitado: %zu bytes\n", len);
 
@@ -156,7 +156,7 @@ static ssize_t driver_write(
     }
 
     if (ret == 0) {
-        ret = send_frame(dev, POV_FRAME_TYPE_END, eof_msg, sizeof(eof_msg) - 1);
+        ret = send_frame(dev, POV_FRAME_TYPE_END, NULL, 0);
         if (ret < 0)
             pr_warn("[Mi_Driver_Proyecto] No se pudo enviar frame EOF.\n");
     }
