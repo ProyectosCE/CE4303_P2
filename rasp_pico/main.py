@@ -11,8 +11,8 @@ NUM_LEDS = 9
 pixels = neopixel.NeoPixel(machine.Pin(PIN_NUM), NUM_LEDS)
 
 # --- CONFIGURACIÓN WIFI ---
-WIFI_SSID = "Tu_Nombre_De_WiFi"
-WIFI_PASSWORD = "Tu_Contraseña_Del_WiFi"
+WIFI_SSID = "_Casa Campus P5_"
+WIFI_PASSWORD = "casacampus"
 
 # Variables de control
 grafico_pov = [[(0, 0, 0) for _ in range(NUM_LEDS)]]
@@ -102,7 +102,7 @@ try:
                 time.sleep(velocidad_giro)
             
             apagar_todos()
-            time.sleep(velocidad_giro * 10)
+            time.sleep(velocidad_giro) # * 10
 
 except KeyboardInterrupt:
     servidor.close()
