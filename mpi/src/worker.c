@@ -12,6 +12,17 @@
 #include "display_frame.h"
 #include "processing.h"
 
+/*
+Archivo: src/worker.c
+Descripción:
+Implementación de la función run_worker, 
+que es la función principal que ejecuta cada proceso 
+trabajador en el sistema MPI. Esta función se encarga
+de recibir los metadatos y el segmento de imagen cifrada, realizar el descifrado utilizando XTEA en modo CTR, procesar las filas descifradas para obtener los acumuladores por LED, y enviar los resultados de vuelta al proceso driver. La función también mide el tiempo de procesamiento y calcula un checksum para verificar la integridad del procesamiento. Esta implementación es crucial para el rendimiento general del sistema, ya que cada trabajador realiza una parte
+*/
+
+/
+
 int run_worker(int rank) {
 
     char hostname[256];

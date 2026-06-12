@@ -6,13 +6,30 @@
 #include "worker.h"
 #include "pov_driver_lib.h"
 
+/*
+Archivo: src/mpi.c
+Descripción:
+Archivo principal que contiene la función main para el programa MPI. Esta función se encarga de inicializar MPI, determinar el rol de cada proceso (maestro o trabajador), y llamar a la función correspondiente para ejecutar la lógica del maestro o del trabajador. Además, maneja la finalización de MPI y el retorno del código de salida adecuado según el resultado de la ejecución.
+*/
+
+
+/*
+main
+Función principal del programa MPI. Se encarga de inicializar MPI, determinar el rol de cada proceso (maestro o trabajador), y llamar a la función correspondiente para ejecutar la lógica del maestro o del trabajador. Además, maneja la finalización de MPI y el retorno del código de salida adecuado según el resultado de la ejecución.
+Recibe:
+- argc: número de argumentos de línea de comandos.
+- argv: arreglo de cadenas de caracteres que contiene los argumentos de línea de comandos.
+Retorna: 0 si la ejecución fue exitosa, 1 si hubo un error.
+*/
 int main(int argc, char **argv) {
 
     int rank;
     int size;
 
+    // Inicializar MPI y obtener el rank y el tamaño del comunicador.
     MPI_Init(&argc, &argv);
 
+    // Obtener el rank del proceso actual y el número total de procesos en el comunicador.
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
@@ -21,6 +38,8 @@ int main(int argc, char **argv) {
     int send_to_driver = 0;
     const char *device_path = NULL;
 
+    // El proceso maestro (rank 0) se encarga de leer el archivo de entrada, distribuir el trabajo entre los procesos trabajadores, recopilar los resultados, construir el frame final para el driver, y generar la salida para el driver.
+    // Si el rango es 0 es el maestro, de lo contrario es un trabajador.
     if (rank == 0) {
         if (argc < 2) {
             printf("Uso:\n");
@@ -59,6 +78,7 @@ int main(int argc, char **argv) {
         }
     }
 
+    // Informar a todos los procesos sobre cualquier error fatal detectado en el proceso maestro para que puedan finalizar adecuadamente.
     MPI_Bcast(
         &fatal_error,
         1,
@@ -74,6 +94,7 @@ int main(int argc, char **argv) {
 
     int result = 0;
 
+    // Si el rango es 0, ejecutar la lógica del maestro; de lo contrario, ejecutar la lógica del trabajador.
     if (rank == 0) {
         result =
             run_master(
@@ -83,6 +104,7 @@ int main(int argc, char **argv) {
                 send_to_driver
             );
     } else {
+        // si es trabajador, ejecutar la función run_worker que se encarga de recibir el segmento cifrado, procesarlo, y enviar los resultados de vuelta al maestro.
         result =
             run_worker(rank);
     }

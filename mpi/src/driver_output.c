@@ -6,6 +6,26 @@
 
 #include "pov_driver_lib.h"
 
+/*
+Archivo: src/driver_output.c
+Descripción:
+Implementación de funciones relacionadas con la generación del paquete de salida para el driver y su envío opcional.
+Estas funciones incluyen la construcción del paquete binario que el driver espera, la escritura de este
+paquete a un archivo, y la opción de enviarlo directamente al dispositivo del driver.
+*/
+
+
+/*
+driver_output_write_and_optionally_send
+Genera el paquete de salida para el driver a partir de un DisplayFrame, lo guarda en un archivo, y opcionalmente lo envía al dispositivo del driver.
+Recibe:
+- output_filename: ruta al archivo donde se guardará el paquete generado.
+- velocidad_ms: velocidad en milisegundos que se incluirá en el paquete para el driver.
+- frame: puntero al DisplayFrame que contiene la información de la imagen a enviar al driver.
+- device_path: ruta al dispositivo del driver (ej. /dev/raspberry_usb). Si es NULL, se usará el valor por defecto definido en la biblioteca.
+- send_to_driver: flag que indica si se debe enviar el paquete al driver después de generarlo. Si es 0, solo se genera el archivo.
+Retorna: 0 si la operación fue exitosa, -1 si hubo un error en la generación del paquete o en la escritura del archivo. En caso de error, no se intenta enviar al driver.
+*/
 int driver_output_write_and_optionally_send(
     const char *output_filename,
     uint32_t velocidad_ms,
