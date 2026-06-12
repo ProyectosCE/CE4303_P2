@@ -3,6 +3,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+
+/*
+ * Lee el archivo binario de entrada y llena la estructura BinHeader y el payload cifrado.
+ *
+ * El caller es responsable de liberar el payload con free() cuando ya no se necesite.
+ */
+
+
+
+ // Lee un uint32_t big-endian de un buffer de 4 bytes.
 static uint32_t read_u32_be(const uint8_t *buffer) {
     return
         ((uint32_t)buffer[0] << 24) |
@@ -11,6 +21,14 @@ static uint32_t read_u32_be(const uint8_t *buffer) {
         ((uint32_t)buffer[3]);
 }
 
+/*
+bin_read_file
+Lee el archivo binario de entrada y llena la estructura BinHeader y el payload cifrado.
+recibe: - filename: ruta al archivo binario de entrada.
+         - header: puntero a BinHeader donde se llenarán los campos del header.
+         - payload_out: puntero a uint8_t* donde se asignará la dirección del payload cifrado leído del archivo. El caller es responsable de liberar este buffer con free() cuando ya no se necesite.
+retorna: 0 si la lectura fue exitosa, -1 si hubo un error (ej. archivo no encontrado, formato inválido, etc.). En caso de error, no se asigna nada a payload_out.
+*/
 int bin_read_file(
     const char *filename,
     BinHeader *header,
@@ -23,6 +41,19 @@ int bin_read_file(
         return -1;
     }
 
+    // Leer el header de 40 bytes.
+    // El header tiene el siguiente formato (todos los campos son big-endian):
+    // Offset  Tamaño  Descripción
+    // 0       4       Magic (debe ser BIN_MAGIC)
+    // 4       4       Version (debe ser BIN_VERSION)
+    // 8       4       Width (ancho de la imagen en píxeles)
+    // 12      4       Height (alto de la imagen en píxeles)
+    // 16      4       Row stride bytes (número de bytes por fila, incluyendo padding)
+    // 20      4       Speed ms (velocidad en milisegundos para el driver)
+    // 24      4       Payload size (tamaño del payload cifrado en bytes, debe ser igual a height * row_stride_bytes)
+    // 28      4       Cipher rounds (número de rondas de cifrado XTEA)
+    // 32      4       Nonce0 (parte baja del nonce para CTR)
+    // 36      4       Nonce1 (parte alta del nonce para CTR)
     uint8_t raw_header[HEADER_SIZE_BYTES];
 
     if (fread(raw_header, 1, HEADER_SIZE_BYTES, fp)
@@ -122,6 +153,13 @@ int bin_read_file(
     return 0;
 }
 
+
+/*
+bin_print_header
+Imprime el contenido del BinHeader de forma legible para el usuario.
+recibe: - header: puntero al BinHeader que se desea imprimir.
+retorna: void. La función solo imprime en consola.
+*/
 void bin_print_header(const BinHeader *header) {
     printf("\n[BIN HEADER]\n");
     printf("Magic            : 0x%08X\n", header->magic);

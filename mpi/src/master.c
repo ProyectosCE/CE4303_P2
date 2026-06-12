@@ -15,10 +15,31 @@
 #include "display_frame.h"
 #include "driver_output.h"
 
+
+/*
+Archivo: src/master.c
+Descripción:
+Implementación de la función run_master, que actúa como el proceso maestro en la arquitectura MPI
+para el proyecto. Esta función es responsable de leer el archivo de entrada, distribuir el trabajo entre los procesos trabajadores,
+recopilar los resultados, construir el frame final para el driver, y generar la salida para el driver.
+*/
+
 #define OUTPUT_PACKET_FILE "driver_packet.bin"
 #define DECRYPTED_PBM_FILE "imagen_desc.pbm"
 #define RESULT_DRIVER_PBM_FILE "resultado_mpi_driver.pbm"
 
+
+/*
+run_master
+Función principal del proceso maestro. Se encarga de leer el archivo de entrada, distribuir el
+trabajo entre los procesos trabajadores, recopilar los resultados, construir el frame final para el driver, y generar la salida para el driver.
+Recibe:
+- size: número total de procesos MPI (incluyendo el maestro).
+- input_file: ruta al archivo binario de entrada que contiene la imagen cifrada y su header.
+- device_path: ruta al dispositivo del driver (ej. /dev/raspberry_usb). Si es NULL, se usará el valor por defecto definido en la biblioteca.
+- send_to_driver: flag que indica si se debe enviar el paquete al driver después de generarlo. Si   es 0, solo se genera el archivo.
+Retorna: 0 si la operación fue exitosa, -1 si hubo un error en cualquier etapa del proceso. En caso de error, se imprime un mensaje descriptivo.
+*/
 int run_master(
     int size,
     const char *input_file,
@@ -35,6 +56,7 @@ int run_master(
     double master_start_time =
         MPI_Wtime();
 
+    // Leer el archivo de entrada y obtener el header y el payload cifrado.
     BinHeader header;
     uint8_t *encrypted_payload = NULL;
 
@@ -42,8 +64,9 @@ int run_master(
         return -1;
     }
 
+    // Imprimir el contenido del header para depuración.
     bin_print_header(&header);
-
+    
     int workers_count =
         size - 1;
 
@@ -56,14 +79,20 @@ int run_master(
         return -1;
     }
 
+
+    // Inicializar el buffer del payload descifrado a cero. Esto es importante para que los procesos trabajadores puedan escribir solo las partes que les corresponden sin afectar otras partes del buffer.
     memset(final_plain_payload, 0, header.payload_size);
+
 
     uint64_t accum_size =
         display_final_accum_size_bytes();
 
+
+    // Inicializar el acumulador global a cero. Este acumulador se irá llenando con los resultados de cada trabajador.
     DisplayAccum *global_accum =
         calloc(1, accum_size);
 
+    // También se necesita un acumulador local para recibir los datos de cada trabajador antes de fusionarlos en el acumulador global.
     DisplayAccum *worker_accum =
         malloc(accum_size);
 
@@ -76,14 +105,19 @@ int run_master(
         return -1;
     }
 
+
+    // Distribuir el trabajo entre los procesos trabajadores. Cada trabajador recibirá un segmento de filas para procesar, junto con la información necesaria para descifrar su segmento.
     uint32_t rows_per_worker =
         header.height / (uint32_t)workers_count;
 
+    // El maestro se encarga de calcular los offsets y tamaños de cada segmento, y enviar esta información junto con el payload cifrado correspondiente a cada trabajador.
+    // El restante de filas (si header.height no es divisible exactamente por workers_count) se distribuye entre los primeros 'remainder' trabajadores, dándoles una fila adicional a cada uno hasta que se agoten las filas restantes.
     uint32_t remainder =
         header.height % (uint32_t)workers_count;
 
     uint32_t current_start_row = 0;
 
+    // Enviar a cada trabajador su segmento de filas junto con la información necesaria para el procesamiento.
     for (int worker = 1; worker < size; worker++) {
 
         uint32_t row_count =
@@ -109,6 +143,8 @@ int run_master(
         uint64_t global_block_offset =
             byte_offset / 8u;
 
+        // Preparar los metadatos que se enviarán al trabajador junto con el segmento cifrado. Estos metadatos incluyen la información del header relevante para el procesamiento, así como el rango de filas que el trabajador debe procesar.
+        
         uint32_t meta_u32[9];
 
         meta_u32[0] = header.width;
@@ -126,6 +162,8 @@ int run_master(
         meta_u64[0] = global_block_offset;
         meta_u64[1] = segment_size;
 
+        // Imprimir información sobre el segmento que se está enviando a cada trabajador para depuración.
+
         printf(
             "MASTER sending rows [%u - %u] to worker rank %d | bytes=%llu\n",
             start_row,
@@ -135,6 +173,14 @@ int run_master(
         );
         fflush(stdout);
 
+
+        // IMPORTANTE: el maestro envía primero los metadatos (meta_u32 y meta_u64) 
+        // para que el trabajador sepa qué esperar, y luego envía el segmento cifrado.
+        // Esto permite que el trabajador pueda prepararse adecuadamente para recibir el 
+        // segmento cifrado, especialmente si el tamaño del segmento es grande.
+        
+        
+        // Enviar los metadatos al trabajador. Se envían en dos mensajes separados para mantener la claridad y flexibilidad en el protocolo de comunicación.
         MPI_Send(
             meta_u32,
             9,
@@ -144,6 +190,7 @@ int run_master(
             MPI_COMM_WORLD
         );
 
+        // Enviar los metadatos adicionales en un mensaje separado para mantener la claridad y flexibilidad en el protocolo de comunicación.
         MPI_Send(
             meta_u64,
             2,
@@ -172,6 +219,7 @@ int run_master(
         uint64_t result_u64[4];
         double processing_seconds = 0.0;
 
+        // Recibir los resultados de cada trabajador. Cada trabajador enviará de vuelta el número de filas procesadas, el tamaño del acumulador que envía, el número de píxeles activos encontrados, el checksum parcial, y el tiempo que tomó procesar su segmento.
         MPI_Recv(
             result_u32,
             2,
@@ -182,6 +230,8 @@ int run_master(
             MPI_STATUS_IGNORE
         );
 
+
+        // Recibir los resultados adicionales en un mensaje separado para mantener la claridad y flexibilidad en el protocolo de comunicación.
         MPI_Recv(
             result_u64,
             4,
@@ -192,6 +242,7 @@ int run_master(
             MPI_STATUS_IGNORE
         );
 
+        // Recibir el tiempo de procesamiento del trabajador en un mensaje separado para mantener la claridad y flexibilidad en el protocolo de comunicación.
         MPI_Recv(
             &processing_seconds,
             1,

@@ -2,6 +2,22 @@
 
 #include <stdio.h>
 
+
+/*
+Archivo: src/pbm_debug.c
+Descripción:
+Implementación de funciones auxiliares para generar archivos PBM de depuración. Estas funciones permiten guardar
+imágenes en formato PBM para visualizar el resultado del descifrado de la imagen original, así como el resultado final que se envía al driver. Estas funciones son útiles para verificar que el procesamiento de la imagen se está realizando correctamente en cada etapa del pipeline.
+*/
+
+
+/*
+Genera un archivo PBM que representa la imagen descifrada a partir del payload plano.
+Recibe:
+- filename: ruta al archivo PBM que se generará.
+- width: ancho de la imagen en píxeles.
+- height: alto de la imagen en píxeles.
+*/
 int pbm_debug_write_decrypted(
     const char *filename,
     uint32_t width,

@@ -1,6 +1,15 @@
 #include "crypto.h"
 
 /*
+Archivo: src/crypto.c
+Descripción:
+Implementación de funciones de cifrado y descifrado, específicamente XTEA en modo CTR,
+ para el proyecto de MPI. Estas funciones permiten cifrar y descifrar segmentos de datos 
+ utilizando un nonce y un contador, lo que es útil para distribuir el trabajo de descifrado entre los procesos MPI.
+*/
+
+
+/*
  * Misma clave que se usa en el cliente Python.
  */
 static const uint32_t XTEA_KEY[4] = {
@@ -9,6 +18,16 @@ static const uint32_t XTEA_KEY[4] = {
     0xDEADBEEFu,
     0x01234567u
 };
+
+/*
+xtea_encrypt_block
+Cifra un bloque de 64 bits (8 bytes) utilizando el algoritmo XTEA.
+Recibe:
+- v0: puntero al primer uint32_t del bloque (4 bytes)
+- v1: puntero al segundo uint32_t del bloque (4 bytes)
+- rounds: número de rondas de cifrado (usualmente 32)
+Retorna: void. Los valores cifrados se escriben directamente en v0 y v1.
+*/
 
 static void xtea_encrypt_block(
     uint32_t *v0,
@@ -42,6 +61,14 @@ static void xtea_encrypt_block(
     }
 }
 
+/*
+put_u32_be
+Escribe un uint32_t en formato big-endian en un buffer de 4 bytes.
+Recibe:
+- buffer: puntero al buffer de 4 bytes donde se escribirá el valor.
+- value: el uint32_t que se desea escribir en el buffer.
+Retorna: void. El valor se escribe directamente en el buffer
+*/
 static void put_u32_be(uint8_t *buffer, uint32_t value) {
     buffer[0] = (uint8_t)((value >> 24) & 0xFF);
     buffer[1] = (uint8_t)((value >> 16) & 0xFF);
@@ -56,6 +83,21 @@ static void put_u32_be(uint8_t *buffer, uint32_t value) {
  * - CTR cifra y descifra con la misma función.
  * - global_block_offset permite descifrar segmentos repartidos por MPI.
  * - Como cada fila se alinea a 8 bytes, cada worker empieza en un bloque CTR válido.
+ */
+
+ /*
+ xtea_ctr_crypt_segment
+ Cifra o descifra un segmento de datos utilizando XTEA en modo CTR.
+ Recibe:
+ - input: puntero al buffer de entrada (datos cifrados o sin cifrar)
+ - output: puntero al buffer de salida donde se escribirán los datos procesados (cifrados o descifrados)
+ - length: tamaño del segmento en bytes
+ - rounds: número de rondas de cifrado XTEA
+ - nonce0: parte baja del nonce para CTR
+ - nonce1: parte alta del nonce para CTR
+ - global_block_offset: número de bloque global para calcular el contador en CTR, útil para procesamiento paralelo con MPI
+ Retorna: void. Los datos procesados se escriben directamente en el buffer de salida.
+ 
  */
 void xtea_ctr_crypt_segment(
     const uint8_t *input,

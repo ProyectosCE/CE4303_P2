@@ -4,6 +4,16 @@
 #include <string.h>
 #include <stdio.h>
 
+
+/*
+archivo: src/processing.c
+descripción:
+Implementación de la función principal de procesamiento de filas. Esta función toma las filas descifradas y ejecuta las tres rondas de reducción para obtener la matriz final de acumuladores que representa el
+*/
+
+/*
+get_pbm_bit: función auxiliar para obtener el valor de un bit específico en las filas descifradas. Dado el índice de fila local y la columna, calcula el byte correspondiente en el payload plano y extrae el bit deseado.
+*/
 static uint8_t get_pbm_bit(
     const uint8_t *plain_rows,
     uint32_t row_stride_bytes,
@@ -21,6 +31,10 @@ static uint8_t get_pbm_bit(
         (plain_rows[byte_index] >> bit_offset) & 1u;
 }
 
+/*
+heavy_pixel_work: función que simula una carga de trabajo pesada por píxel. Toma la fila global, la columna y el valor del bit, y realiza una serie de operaciones bit a bit y multiplicaciones para generar un valor pseudoaleatorio. Este valor se utiliza para calcular un checksum que ayuda a verificar la integridad del procesamiento.
+returns: un valor de 64 bits que representa el resultado del trabajo pesado para ese píxel específico. Este valor se utiliza en la función reduce_columns_to_9 para actualizar el checksum global.
+*/
 static uint64_t heavy_pixel_work(
     uint32_t global_row,
     uint32_t col,
@@ -53,6 +67,23 @@ static uint64_t heavy_pixel_work(
  *
  * row_count filas locales x 9 columnas reducidas
  */
+
+ /*
+reduce_columns_to_9: función que realiza la reducción de columnas. Toma las filas descifradas y procesa cada píxel para acumular conteos en una matriz intermedia de acumuladores. Para cada píxel activo (bit = 1), incrementa el conteo de "on_count" en el acumulador correspondiente a la columna reducida. También actualiza un checksum utilizando la función heavy_pixel_work para cada píxel procesado.
+parameters:
+- plain_rows: puntero a las filas descifradas.
+- width: ancho de la imagen en píxeles.
+- row_stride_bytes: número de bytes por fila en el payload plano.
+- start_row: índice de la primera fila local que se está procesando.
+- row_count: número de filas locales que se están procesando.
+- row_column_accum: matriz de acumuladores intermedia donde se almacenan los conteos por fila y columna reducida.
+- active_pixels_out: puntero a una variable donde se almacenará el conteo total de píxeles activos (bit = 1) procesados en esta función.
+- checksum_out: puntero a una variable donde se almacenará el checksum calculado a partir de los píxeles procesados.
+returns: esta función no devuelve un valor, pero actualiza los conteos en row_column_accum, así como los valores de active_pixels_out y checksum_out a través de los punteros proporcionados.
+
+calculo de reduced_col:
+reduced_col = (col * PICO_COLUMN_COUNT) / width
+*/
 static void reduce_columns_to_9(
     const uint8_t *plain_rows,
     uint32_t width,
@@ -125,6 +156,21 @@ static void reduce_columns_to_9(
  *
  * Conceptualmente es como trabajar por columnas reducidas y comprimir
  * las filas globales a 9 buckets verticales.
+ */
+
+
+ /*
+ reduce_rows_to_9: función que realiza la reducción de filas. Toma la matriz intermedia de acumuladores generada por reduce_columns_to_9 y la procesa para reducir las filas a 9 buckets verticales. Para cada acumulador en la matriz intermedia, calcula a qué fila reducida corresponde y acumula los conteos de "on_count" y "total_count" en la matriz final de acumuladores que representa el estado final de cada LED en el hardware.
+parameters:
+- row_column_accum: matriz de acumuladores intermedia con conteos por fila local y columna reducida.
+- height: alto de la imagen en píxeles (necesario para calcular la fila reducida).
+- start_row: índice de la primera fila local que se está procesando (necesario para calcular la fila global).
+- row_count: número de filas locales que se están procesando (necesario para iterar sobre la matriz intermedia).
+- final_accum: matriz de acumuladores final donde se almacenarán los conteos por LED en el hardware después de la reducción de filas.
+returns: esta función no devuelve un valor, pero actualiza los conteos en final_accum a través del puntero proporcionado. Cada acumulador en final_accum representará el conteo total de píxeles activos y el conteo total de píxeles procesados para cada LED en el hardware después de la reducción de filas.
+
+calculo de reduced_row:
+reduced_row = (global_row * PICO_LED_COUNT) / height
  */
 static void reduce_rows_to_9(
     const DisplayAccum *row_column_accum,

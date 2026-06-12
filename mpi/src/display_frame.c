@@ -4,18 +4,46 @@
 #include <string.h>
 #include <stdio.h>
 
+
+/*
+Archivo: src/display_frame.c
+Descripción:
+Implementación de funciones relacionadas con la estructura DisplayFrame y DisplayAccum, que representan el resultado final
+    del procesamiento de la imagen para ser enviada al driver.
+    Estas funciones incluyen la construcción de un DisplayFrame a partir 
+    de un acumulador de datos, así como la gestión de memoria asociada.
+
+*/
+
+/*
+display_final_accum_count
+Calcula la cantidad total de elementos en el acumulador final basado en las dimensiones del display.
+Retorna: el número total de elementos en el acumulador final (columnas x LEDs).
+*/
 uint64_t display_final_accum_count(void) {
     return
         (uint64_t)PICO_COLUMN_COUNT *
         (uint64_t)PICO_LED_COUNT;
 }
 
+/*
+display_final_accum_size_bytes
+Calcula el tamaño total en bytes del acumulador final basado en las dimensiones del display.
+Retorna: el tamaño total en bytes del acumulador final.
+*/
 uint64_t display_final_accum_size_bytes(void) {
     return
         display_final_accum_count() *
         sizeof(DisplayAccum);
 }
 
+/*
+display_accum_clear
+Limpia el acumulador de datos, estableciendo todos los valores a cero.
+Recibe:
+- accum: puntero al acumulador de datos que se desea limpiar.
+Retorna: void.
+*/
 void display_accum_clear(DisplayAccum *accum) {
     if (accum == NULL) {
         return;
@@ -28,6 +56,14 @@ void display_accum_clear(DisplayAccum *accum) {
     );
 }
 
+/*
+display_accum_merge
+Combina los valores de un acumulador de datos con otro, sumando los contadores.
+Recibe:
+- destination: puntero al acumulador de destino donde se sumarán los valores.
+- source: puntero al acumulador de origen desde donde se leerán los valores.
+Retorna: void.
+*/
 void display_accum_merge(
     DisplayAccum *destination,
     const DisplayAccum *source
@@ -41,6 +77,14 @@ void display_accum_merge(
     }
 }
 
+/*
+display_frame_build_from_accum
+Construye un DisplayFrame a partir de un acumulador de datos.
+Recibe:
+- accum: puntero al acumulador de datos.
+- frame: puntero al frame de visualización que se construirá.
+Retorna: 0 en caso de éxito, -1 en caso de error.
+*/
 int display_frame_build_from_accum(
     const DisplayAccum *accum,
     DisplayFrame *frame
@@ -105,6 +149,13 @@ int display_frame_build_from_accum(
     return 0;
 }
 
+/*
+display_frame_free
+Libera la memoria asignada para un DisplayFrame.
+Recibe:
+- frame: puntero al frame de visualización que se desea liberar.
+Retorna: void.
+*/
 void display_frame_free(DisplayFrame *frame) {
     if (frame == NULL) {
         return;

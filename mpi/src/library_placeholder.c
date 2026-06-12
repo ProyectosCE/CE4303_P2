@@ -3,6 +3,24 @@
 #include <stdio.h>
 #include <stdint.h>
 
+
+/*
+Archivo: src/library_placeholder.c
+Descripción:
+Implementación de una función placeholder para generar un paquete de salida para el driver sin realizar ningún procesamiento
+real. Esta función se puede usar para probar la generación de paquetes y la integración con el driver 
+sin depender del resto del código de procesamiento.
+*/
+
+/*
+pov_placeholder_write_packet
+Genera un paquete de salida para el driver a partir de un DisplayFrame, lo guarda en un archivo, sin realizar ningún procesamiento real de la imagen.
+Recibe:
+- filename: ruta al archivo donde se guardará el paquete generado.
+- speed_ms: velocidad en milisegundos que se incluirá en el paquete para el driver.
+- frame: puntero al DisplayFrame que contiene la información de la imagen a enviar al driver.
+Retorna: 0 si la operación fue exitosa, -1 si hubo un error en la generación del paquete o en la escritura del archivo. En caso de error, no se intenta enviar al driver.
+*/
 int pov_placeholder_write_packet(
     const char *filename,
     uint32_t speed_ms,
