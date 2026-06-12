@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#include "pov_driver.h"
+#include "pov_driver_lib.h"
 
 int driver_output_write_and_optionally_send(
     const char *output_filename,

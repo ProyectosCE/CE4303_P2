@@ -301,11 +301,13 @@ int run_master(
     }
 
     int lib_result =
-        pov_placeholder_write_packet(
-            OUTPUT_PACKET_FILE,
-            header.speed_ms,
-            &frame
-        );
+    driver_output_write_and_optionally_send(
+        OUTPUT_PACKET_FILE,
+        header.speed_ms,
+        &frame,
+        device_path,
+        send_to_driver
+    );
 
     display_frame_free(&frame);
 
