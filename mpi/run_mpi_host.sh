@@ -1,3 +1,3 @@
 #!/bin/bash
 
-mpirun -hostfile=hosts.txt ./mpi imagen_payload.bin
+mpirun -hostfile=hosts.txt ./mpi_proyectosce imagen_payload.bin

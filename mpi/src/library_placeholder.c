@@ -27,10 +27,6 @@ int pov_placeholder_write_packet(
         return -1;
     }
 
-    /*
-     * Compatible con:
-     * struct.pack("!H", velocidad_ms)
-     */
     uint8_t speed_bytes[2];
 
     speed_bytes[0] =
@@ -45,18 +41,6 @@ int pov_placeholder_write_packet(
         return -1;
     }
 
-    /*
-     * Compatible con:
-     *
-     * for columna in matriz_ejemplo:
-     *     for led in columna:
-     *         paquete_binario += struct.pack("BBB", ...)
-     *
-     * frame->rgb ya viene en orden:
-     * columna 0, led 0..8
-     * columna 1, led 0..8
-     * ...
-     */
     uint64_t rgb_size =
         (uint64_t)frame->columns *
         (uint64_t)frame->leds_per_column *
