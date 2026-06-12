@@ -77,18 +77,27 @@ int display_frame_build_from_accum(
             uint32_t total_count =
                 accum[accum_index].total_count;
 
-            int is_on =
+            /*
+             * Resultado PBM:
+             *
+             * Si la mayoría de pixeles originales estaban activos,
+             * consideramos este punto como "negro" en PBM.
+             *
+             * PBM 1 = negro = figura = rojo en hardware.
+             * PBM 0 = blanco = fondo = cian en hardware.
+             */
+            int pbm_black =
                 total_count > 0 &&
                 ((uint64_t)on_count * 2u >= (uint64_t)total_count);
 
-            if (is_on) {
-                frame->rgb[rgb_index + 0] = COLOR_ON_R;
-                frame->rgb[rgb_index + 1] = COLOR_ON_G;
-                frame->rgb[rgb_index + 2] = COLOR_ON_B;
+            if (pbm_black) {
+                frame->rgb[rgb_index + 0] = PBM_FOREGROUND_R;
+                frame->rgb[rgb_index + 1] = PBM_FOREGROUND_G;
+                frame->rgb[rgb_index + 2] = PBM_FOREGROUND_B;
             } else {
-                frame->rgb[rgb_index + 0] = COLOR_OFF_R;
-                frame->rgb[rgb_index + 1] = COLOR_OFF_G;
-                frame->rgb[rgb_index + 2] = COLOR_OFF_B;
+                frame->rgb[rgb_index + 0] = PBM_BACKGROUND_R;
+                frame->rgb[rgb_index + 1] = PBM_BACKGROUND_G;
+                frame->rgb[rgb_index + 2] = PBM_BACKGROUND_B;
             }
         }
     }

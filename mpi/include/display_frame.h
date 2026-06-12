@@ -6,13 +6,24 @@
 #define PICO_LED_COUNT     9
 #define PICO_COLUMN_COUNT  9
 
-#define COLOR_ON_R   0
-#define COLOR_ON_G   0
-#define COLOR_ON_B   30
+/*
+ * Interpretación PBM:
+ *
+ * 0 = blanco/fondo
+ * 1 = negro/figura
+ *
+ * En el hardware:
+ *
+ * fondo  -> cian
+ * figura -> rojo
+ */
+#define PBM_BACKGROUND_R  0
+#define PBM_BACKGROUND_G  180
+#define PBM_BACKGROUND_B  255
 
-#define COLOR_OFF_R  0
-#define COLOR_OFF_G  0
-#define COLOR_OFF_B  0
+#define PBM_FOREGROUND_R  255
+#define PBM_FOREGROUND_G  0
+#define PBM_FOREGROUND_B  0
 
 typedef struct {
     uint32_t on_count;

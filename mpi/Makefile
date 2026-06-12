@@ -32,6 +32,6 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -rf $(OBJ_DIR) $(TARGET) driver_packet.bin imagen_desc.pbm
+	rm -rf $(OBJ_DIR) $(TARGET) driver_packet.bin imagen_desc.pbm resultado_mpi_driver.pbm
 
 .PHONY: all clean

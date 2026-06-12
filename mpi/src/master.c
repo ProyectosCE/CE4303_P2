@@ -17,6 +17,7 @@
 
 #define OUTPUT_PACKET_FILE "driver_packet.bin"
 #define DECRYPTED_PBM_FILE "imagen_desc.pbm"
+#define RESULT_DRIVER_PBM_FILE "resultado_mpi_driver.pbm"
 
 int run_master(
     int size,
@@ -290,9 +291,9 @@ int run_master(
     DisplayFrame frame;
 
     if (display_frame_build_from_accum(
-        global_accum,
-        &frame
-    ) < 0) {
+            global_accum,
+            &frame
+        ) < 0) {
         free(worker_accum);
         free(global_accum);
         free(final_plain_payload);
@@ -300,14 +301,31 @@ int run_master(
         return -1;
     }
 
+    /*
+    * Guardar SIEMPRE el resultado final del trabajo MPI.
+    *
+    * Este PBM representa exactamente la matriz que se envía al driver:
+    *
+    * columnas x LEDs
+    *
+    * Ejemplo actual:
+    * 9 columnas x 9 LEDs
+    */
+    if (pbm_debug_write_driver_frame(
+            RESULT_DRIVER_PBM_FILE,
+            &frame
+        ) < 0) {
+        printf("WARNING: no se pudo escribir resultado_mpi_driver.pbm\n");
+    }
+
     int lib_result =
-    driver_output_write_and_optionally_send(
-        OUTPUT_PACKET_FILE,
-        header.speed_ms,
-        &frame,
-        device_path,
-        send_to_driver
-    );
+        driver_output_write_and_optionally_send(
+            OUTPUT_PACKET_FILE,
+            header.speed_ms,
+            &frame,
+            device_path,
+            send_to_driver
+        );
 
     display_frame_free(&frame);
 
