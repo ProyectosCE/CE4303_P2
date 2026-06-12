@@ -1,0 +1,43 @@
+# Ignore compiled object files and kernel/module build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+
+# Kernel build files
+Module.symvers
+modules.order
+
+# Driver-specific build outputs
+driver/*.o
+driver/*.ko
+driver/*.mod
+driver/*.cmd
+driver/*.mod.c
+
+# Common binary/output files
+*.out
+*.elf
+*.exe
+
+# Temporary and editor files
+*~
+*.swp
+.vscode/
+.idea/
+*.iml
+
+# Logs, indexes, tags
+*.log
+tags
+ctags
+
+# macOS
+.DS_Store
+
+# Ensure source files and the Makefile are NOT ignored
+!*.C
+!Makefile
+
+driver/prueba_rasp.png
