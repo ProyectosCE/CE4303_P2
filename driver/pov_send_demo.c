@@ -1,11 +1,31 @@
+/*
+Nombre archivo: pov_send_demo.c
+Que hace: Programa de demostración que genera un dibujo de 9x9 (corazón
+rosa sobre fondo celeste, aunque también incluye funciones para dibujar
+un círculo y una casa) y lo envía al driver POV como un paquete de 9
+columnas. La velocidad (en ms) puede pasarse como argumento.
+*/
+
 #include "pov_driver_lib.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-#define DRAWING_SIZE 9
+#define DRAWING_SIZE 9 
 
+/*
+Nombre de funcion: set_pixel
+Que hace: Escribe el color (r,g,b) de un pixel específico (columna, led)
+dentro del buffer plano "rgb", calculando su posición usando
+POV_COLUMN_BYTES y POV_RGB_BYTES.
+Que recibe:
+  - rgb: buffer de salida (columns * POV_COLUMN_BYTES bytes).
+  - column: índice de columna (eje X) donde escribir.
+  - led: índice de LED dentro de la columna (eje Y, 0..POV_NUM_LEDS-1).
+  - r, g, b: componentes de color a escribir.
+Que retorna: Nada (void). Modifica "rgb" en el lugar correspondiente.
+*/
 static void set_pixel(uint8_t *rgb, size_t column, size_t led, uint8_t r, uint8_t g, uint8_t b)
 {
     size_t base = column * POV_COLUMN_BYTES + led * POV_RGB_BYTES;
@@ -15,6 +35,17 @@ static void set_pixel(uint8_t *rgb, size_t column, size_t led, uint8_t r, uint8_
     rgb[base + 2] = b;
 }
 
+/*
+Nombre de funcion: fill_circle_blue_background_red
+Que hace: Llena el buffer "rgb" con un dibujo de 9x9: un círculo azul
+de radio 4 centrado en (4,4), sobre un fondo rojo. Usa la ecuación
+dx^2+dy^2 <= radio^2 para decidir si un pixel pertenece al círculo.
+Que recibe:
+  - rgb: buffer de salida (columns * POV_COLUMN_BYTES bytes).
+  - columns: cantidad de columnas a recorrer (eje X).
+Que retorna: Nada (void). No se usa en el main actual (queda disponible
+como alternativa de dibujo).
+*/
 static void fill_circle_blue_background_red(uint8_t *rgb, size_t columns)
 {
     /*
@@ -57,7 +88,17 @@ static void fill_circle_blue_background_red(uint8_t *rgb, size_t columns)
     }
 }
 
-
+/*
+Nombre de funcion: fill_house_blue_green_roof_red_background
+Que hace: Llena el buffer "rgb" con un dibujo de 9x9: una "casa" con
+techo triangular verde (filas 0-3, ancho creciente hacia abajo) y
+cuerpo azul (filas 4-8, columnas 2-6), sobre fondo rojo.
+Que recibe:
+  - rgb: buffer de salida (columns * POV_COLUMN_BYTES bytes).
+  - columns: cantidad de columnas a recorrer (eje X).
+Que retorna: Nada (void). No se usa en el main actual (queda disponible
+como alternativa de dibujo).
+*/
 static void fill_house_blue_green_roof_red_background(uint8_t *rgb, size_t columns)
 {
     /*
@@ -122,7 +163,18 @@ static void fill_house_blue_green_roof_red_background(uint8_t *rgb, size_t colum
     }
 }
 
-
+/*
+Nombre de funcion: fill_heart_pink_sky_background
+Que hace: Llena el buffer "rgb" con un dibujo de 9x9: un corazón rosa
+sobre fondo celeste, definido mediante una máscara de caracteres
+("heart"), donde '#' = rosa y '.' = celeste. Esta es la figura usada
+por el main.
+Que recibe:
+  - rgb: buffer de salida (columns * POV_COLUMN_BYTES bytes).
+  - columns: cantidad de columnas a recorrer (debe ser <= DRAWING_SIZE,
+    ya que "heart" tiene DRAWING_SIZE caracteres por fila).
+Que retorna: Nada (void).
+*/
 static void fill_heart_pink_sky_background(uint8_t *rgb, size_t columns)
 {
     /*
@@ -171,6 +223,20 @@ static void fill_heart_pink_sky_background(uint8_t *rgb, size_t columns)
     }
 }
 
+/*
+Nombre de funcion: main
+Que hace:
+  - Reserva un buffer RGB de DRAWING_SIZE columnas y lo llena con el
+    dibujo del corazón (fill_heart_pink_sky_background).
+  - Abre el driver POV y envía el buffer como un paquete con la
+    velocidad indicada (por defecto 0, o argv[1] si se proporciona).
+  - Imprime un resumen del envío.
+Que recibe:
+  - argc, argv: argv[1] opcional, velocidad en ms (entero).
+Que retorna:
+  - 0 si el dibujo se envió correctamente.
+  - 1 si falla malloc, la apertura del driver o el envío del paquete.
+*/
 int main(int argc, char **argv)
 {
     uint16_t velocidad_ms = 0.01;

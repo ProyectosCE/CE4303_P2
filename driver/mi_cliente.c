@@ -1,9 +1,27 @@
+/*
+Nombre archivo: mi_cliente.c
+Que hace: Programa de ejemplo que abre el dispositivo del driver POV
+(/dev/raspberry_usb), construye una columna RGB con los 9 LEDs en rojo,
+y la envía como un único paquete usando la librería pov_driver_lib.
+*/
+
 #include "pov_driver_lib.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+/*
+Nombre de funcion: main
+Que hace:
+  - Construye un buffer RGB de 1 columna (9 LEDs * 3 bytes = 27 bytes)
+    con todos los LEDs en color rojo (255,0,0).
+  - Abre el driver POV, envía el paquete (velocidad 4ms) y lo cierra.
+Que recibe: Nada (no usa argc/argv).
+Que retorna:
+  - 0 si el paquete se envió correctamente.
+  - 1 si falla la apertura del driver o el envío del paquete.
+*/
 int main(void)
 {
     int fd;
