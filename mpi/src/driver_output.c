@@ -72,44 +72,72 @@ int driver_output_write_and_optionally_send(
     printf("Total packet bytes : %llu\n",
            (unsigned long long)packet_len);
 
-    if (send_to_driver) {
-        const char *path =
-            device_path != NULL
-                ? device_path
-                : POV_DRIVER_DEFAULT_DEVICE;
-
-        printf("\n[POV DRIVER SEND]\n");
-        printf("Device             : %s\n", path);
-
-        int fd =
-            pov_driver_open(path);
-
-        if (fd < 0) {
-            printf("ERROR: no se pudo abrir el driver %s\n", path);
-            free(packet);
-            return -1;
-        }
-
-        int send_result =
-            pov_driver_send_raw(
-                fd,
-                packet,
-                packet_len
-            );
-
-        pov_driver_close(fd);
-
-        if (send_result < 0) {
-            printf("ERROR: pov_driver_send_raw falló.\n");
-            free(packet);
-            return -1;
-        }
-
-        printf("Paquete enviado correctamente al driver.\n");
-    } else {
+    if (!send_to_driver) {
         printf("\n[POV DRIVER SEND]\n");
         printf("Envío desactivado. Solo se generó driver_packet.bin.\n");
+
+        free(packet);
+        return 0;
     }
+
+    const char *path =
+        device_path != NULL
+            ? device_path
+            : POV_DRIVER_DEFAULT_DEVICE;
+
+    printf("\n[POV DRIVER SEND]\n");
+    printf("Device             : %s\n", path);
+
+    int fd =
+        pov_driver_open(path);
+
+    if (fd < 0) {
+        printf("WARNING: no se pudo abrir el driver %s\n", path);
+        printf("WARNING: el paquete ya fue generado en %s\n", output_filename);
+        printf("WARNING: MPI terminará correctamente porque el procesamiento sí finalizó.\n");
+
+        free(packet);
+
+        /*
+         * Importante:
+         * No retornar -1 aquí.
+         * El procesamiento MPI fue exitoso; solo falló la salida al hardware.
+         */
+        return 0;
+    }
+
+    int send_result =
+        pov_driver_send_raw(
+            fd,
+            packet,
+            packet_len
+        );
+
+    pov_driver_close(fd);
+
+    if (send_result < 0) {
+        printf("WARNING: pov_driver_send_raw falló.\n");
+        printf("WARNING: código retornado por la biblioteca: %d\n", send_result);
+
+        if (send_result < 0) {
+            printf("WARNING: posible errno reportado: %d\n", -send_result);
+        }
+
+        printf("WARNING: probablemente la Raspberry/Pico no está conectada o no respondió.\n");
+        printf("WARNING: el paquete ya fue generado en %s\n", output_filename);
+        printf("WARNING: MPI terminará correctamente porque el procesamiento sí finalizó.\n");
+
+        free(packet);
+
+        /*
+         * Importante:
+         * No retornar -1 aquí.
+         * Esto evita que prterun marque todo el job como fallido.
+         */
+        return 0;
+    }
+
+    printf("Paquete enviado correctamente al driver.\n");
 
     free(packet);
 
