@@ -1,3 +1,15 @@
+/*
+Nombre archivo: receptor.c
+
+Que hace: Programa de espacio de usuario para la Raspberry Pi 4 que actúa
+como puente USB-Ethernet <-> Pico. Abre un socket AF_PACKET crudo sobre
+una interfaz USB-Ethernet, escucha tramas con EtherType custom (0x88B5)
+generadas por mi_driver.c, reensambla los fragmentos (tipo DATA) según el
+header pov_frame_header hasta recibir un frame tipo END, y según el modo
+de operación: reenvía el mensaje completo a la Pico por TCP (modo "normal"),
+lo muestra como texto (modo "txt"), o lo muestra en hexadecimal (modo "frame").
+*/
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <linux/if_ether.h>
@@ -12,8 +24,8 @@
 #include <unistd.h>
 #include <ctype.h>
 
-#define DEFAULT_USB_INTERFACE "usb0"
-#define DEFAULT_PICO_PORT 5001
+#define DEFAULT_USB_INTERFACE "usb0" // Interfaz por defecto si no se especifica
+#define DEFAULT_PICO_PORT 5001 // Puerto TCP por defecto de la Pico
 
 #define CUSTOM_ETHERTYPE 0x88B5
 
@@ -23,29 +35,35 @@
 
 #define NUM_LEDS 9
 #define RGB_BYTES 3
-#define COLUMN_BYTES (NUM_LEDS * RGB_BYTES)
+#define COLUMN_BYTES (NUM_LEDS * RGB_BYTES) // 27 bytes por columna
 
-#define MAX_FRAME_SIZE 2048
-#define MAX_POV_PACKET_SIZE (512 * 1024)
+#define MAX_FRAME_SIZE 2048  // Tamaño máximo de una trama Ethernet recibida
+#define MAX_POV_PACKET_SIZE (512 * 1024) // Límite máximo del mensaje reensamblado
 
+// Header que antecede a cada chunk de datos enviado por mi_driver.c (debe coincidir con
+// "struct pov_frame_header" del driver, pero aquí se leen los campos como big-endian explícitos).
 struct pov_frame_header {
     uint32_t magic_be;
     uint8_t type;
     uint16_t length_be;
 } __attribute__((packed));
 
+// Buffer dinámico (tipo "vector" de bytes) usado para reensamblar el mensaje completo
+// a partir de los fragmentos DATA recibidos.
 struct dynamic_buffer {
     uint8_t *data;
     size_t size;
     size_t capacity;
 };
 
+// Modos de operación del receptor (ver parse_config / print_usage)
 enum receiver_mode {
-    MODE_NORMAL = 1,
-    MODE_TEST_TXT,
-    MODE_TEST_FRAME
+    MODE_NORMAL = 1, // Reenvía el mensaje reensamblado a la Pico por TCP
+    MODE_TEST_TXT, // Interpreta el mensaje como texto y lo imprime
+    MODE_TEST_FRAME // Imprime el mensaje en hexadecimal y valida formato POV
 };
 
+// Configuración derivada de los argumentos de línea de comandos
 struct receiver_config {
     enum receiver_mode mode;
     const char *interface_name;
@@ -53,6 +71,14 @@ struct receiver_config {
     uint16_t pico_port;
 };
 
+/*
+Nombre de funcion: print_usage
+Que hace: Imprime por stderr las distintas formas de invocar el programa
+(modo normal, txt, frame) con ejemplos.
+Que recibe:
+  - program_name: nombre del ejecutable (argv[0]), usado en los ejemplos.
+Que retorna: Nada (void).
+*/
 static void print_usage(const char *program_name)
 {
     fprintf(stderr, "Uso:\n");
@@ -65,6 +91,15 @@ static void print_usage(const char *program_name)
     fprintf(stderr, "  sudo %s frame usb0\n", program_name);
 }
 
+/*
+Nombre de funcion: mode_to_string
+Que hace: Convierte un valor de enum receiver_mode a una descripción
+legible en español, para mostrarla en los mensajes de estado.
+Que recibe:
+  - mode: modo de operación actual.
+Que retorna: cadena constante con el nombre del modo ("normal",
+"prueba txt", "prueba frame" o "desconocido").
+*/
 static const char *mode_to_string(enum receiver_mode mode)
 {
     switch (mode) {
@@ -79,11 +114,28 @@ static const char *mode_to_string(enum receiver_mode mode)
     }
 }
 
+/*
+Nombre de funcion: buffer_reset
+Que hace: "Vacía" el buffer dinámico poniendo su tamaño en 0, sin liberar
+la memoria reservada (capacity se mantiene, para reutilizar el buffer
+en el siguiente mensaje).
+Que recibe:
+  - buffer: buffer dinámico a reiniciar.
+Que retorna: Nada (void).
+*/
 static void buffer_reset(struct dynamic_buffer *buffer)
 {
     buffer->size = 0;
 }
 
+/*
+Nombre de funcion: buffer_free
+Que hace: Libera la memoria reservada por el buffer dinámico y reinicia
+todos sus campos a 0/NULL.
+Que recibe:
+  - buffer: buffer dinámico a liberar.
+Que retorna: Nada (void).
+*/
 static void buffer_free(struct dynamic_buffer *buffer)
 {
     free(buffer->data);
@@ -92,6 +144,19 @@ static void buffer_free(struct dynamic_buffer *buffer)
     buffer->capacity = 0;
 }
 
+/*
+Nombre de funcion: buffer_append
+Que hace: Agrega "len" bytes de "data" al final del buffer dinámico,
+creciendo (duplicando) la capacidad con realloc cuando es necesario.
+Rechaza el append si el tamaño resultante excedería MAX_POV_PACKET_SIZE.
+Que recibe:
+  - buffer: buffer dinámico destino.
+  - data: bytes a agregar.
+  - len: cantidad de bytes a agregar (si es 0, no hace nada y retorna 0).
+Que retorna:
+  - 0 si los datos se agregaron correctamente.
+  - -1 si el resultado excedería MAX_POV_PACKET_SIZE o si realloc falla.
+*/
 static int buffer_append(struct dynamic_buffer *buffer, const uint8_t *data, size_t len)
 {
     uint8_t *new_data;
@@ -106,12 +171,14 @@ static int buffer_append(struct dynamic_buffer *buffer, const uint8_t *data, siz
         return -1;
     }
 
+    // Si ya hay espacio suficiente, solo se copia
     if (buffer->size + len <= buffer->capacity) {
         memcpy(buffer->data + buffer->size, data, len);
         buffer->size += len;
         return 0;
     }
 
+    // Si no hay espacio, se duplica la capacidad (empezando en 4096) hasta que alcance
     new_capacity = buffer->capacity == 0 ? 4096 : buffer->capacity;
 
     while (new_capacity < buffer->size + len)
@@ -132,6 +199,16 @@ static int buffer_append(struct dynamic_buffer *buffer, const uint8_t *data, siz
     return 0;
 }
 
+/*
+Nombre de funcion: print_hex_dump
+Que hace: Imprime "data" en formato hexdump clásico: filas de 16 bytes,
+con el offset, los bytes en hex y su representación ASCII (o '.' si no
+es imprimible).
+Que recibe:
+  - data: buffer a mostrar.
+  - len: cantidad de bytes a mostrar.
+Que retorna: Nada (void). Solo imprime por stdout.
+*/
 static void print_hex_dump(const uint8_t *data, size_t len)
 {
     size_t i;
@@ -158,6 +235,18 @@ static void print_hex_dump(const uint8_t *data, size_t len)
     }
 }
 
+/*
+Nombre de funcion: print_text_payload
+Que hace: Imprime "data" interpretándolo como texto: los caracteres
+imprimibles y '\n','\r','\t' se imprimen tal cual; el resto se muestra
+como escape hexadecimal (\xNN). Si el último byte no es '\n', agrega uno
+para que el formato de salida quede prolijo.
+Que recibe:
+  - data: buffer con el texto recibido.
+  - len: cantidad de bytes en "data".
+Que retorna: Nada (void). Solo imprime por stdout, con encabezado y pie
+delimitadores ("----- TEXTO RECIBIDO ... -----").
+*/
 static void print_text_payload(const uint8_t *data, size_t len)
 {
     size_t i;
@@ -182,6 +271,18 @@ static void print_text_payload(const uint8_t *data, size_t len)
     printf("--------------------------------------\n");
 }
 
+/*
+Nombre de funcion: open_raw_receiver
+Que hace: Crea un socket AF_PACKET/SOCK_RAW filtrado por CUSTOM_ETHERTYPE,
+obtiene el índice de la interfaz dada por nombre (SIOCGIFINDEX) y lo
+enlaza (bind) a esa interfaz para recibir solo tramas de ese EtherType.
+Que recibe:
+  - interface_name: nombre de la interfaz de red (ej. "usb0").
+Que retorna:
+  - El descriptor del socket (>= 0) si todo fue exitoso.
+  - -1 si falla socket(), ioctl(SIOCGIFINDEX) o bind() (en cada caso se
+    imprime el error con perror y se cierra el socket si ya estaba abierto).
+*/
 static int open_raw_receiver(const char *interface_name)
 {
     int sockfd;
@@ -217,6 +318,20 @@ static int open_raw_receiver(const char *interface_name)
     return sockfd;
 }
 
+/*
+Nombre de funcion: send_all
+Que hace: Envía exactamente "len" bytes por un socket TCP, llamando a
+send() repetidamente hasta completar el buffer y reintentando si es
+interrumpido por una señal (EINTR).
+Que recibe:
+  - sockfd: descriptor del socket conectado.
+  - data: buffer a enviar.
+  - len: cantidad total de bytes a enviar.
+Que retorna:
+  - 0 si se enviaron todos los bytes correctamente.
+  - -1 si send() retornó error (se imprime con perror) o retornó 0
+    (conexión cerrada inesperadamente).
+*/
 static int send_all(int sockfd, const uint8_t *data, size_t len)
 {
     size_t sent = 0;
@@ -243,6 +358,21 @@ static int send_all(int sockfd, const uint8_t *data, size_t len)
     return 0;
 }
 
+/*
+Nombre de funcion: forward_to_pico
+Que hace: Abre una conexión TCP nueva hacia la Pico (ip:puerto), envía el
+buffer completo con send_all, hace shutdown de escritura (para que la
+Pico detecte fin de datos con recv()==0) y cierra el socket.
+Que recibe:
+  - pico_ip: dirección IP de la Pico (texto, ej "192.168.1.80").
+  - pico_port: puerto TCP de la Pico.
+  - data: buffer con el mensaje completo a reenviar.
+  - len: tamaño de "data" en bytes.
+Que retorna:
+  - 0 si el envío fue exitoso.
+  - -1 si falla socket(), la IP es inválida (inet_pton), connect() falla,
+    o falla send_all.
+*/
 static int forward_to_pico(const char *pico_ip, uint16_t pico_port, const uint8_t *data, size_t len)
 {
     int sockfd;
@@ -275,12 +405,27 @@ static int forward_to_pico(const char *pico_ip, uint16_t pico_port, const uint8_
         return -1;
     }
 
+    // shutdown(SHUT_WR) indica "fin de datos" al otro lado sin cerrar todavía el socket
     shutdown(sockfd, SHUT_WR);
     close(sockfd);
 
     return 0;
 }
 
+/*
+Nombre de funcion: validate_pico_packet
+Que hace: Valida que "data" tenga el formato esperado por el driver de la
+Pico (main.py): al menos 2 + COLUMN_BYTES bytes, y que (len - 2) sea
+múltiplo de COLUMN_BYTES (27). Si es válido, imprime un resumen
+(velocidad, columnas, LEDs por columna, tamaño total).
+Que recibe:
+  - data: buffer del mensaje reensamblado.
+  - len: tamaño de "data" en bytes.
+Que retorna:
+  - 0 si el paquete tiene un formato válido.
+  - -1 si es demasiado pequeño o (len-2) no es múltiplo de COLUMN_BYTES
+    (en ambos casos se imprime un mensaje de error).
+*/
 static int validate_pico_packet(const uint8_t *data, size_t len)
 {
     size_t matrix_len;
@@ -305,6 +450,7 @@ static int validate_pico_packet(const uint8_t *data, size_t len)
         return -1;
     }
 
+    // Velocidad codificada en los primeros 2 bytes, big-endian (igual que pov_driver_build_packet)
     speed_ms = ((uint16_t)data[0] << 8) | data[1];
     columns = matrix_len / COLUMN_BYTES;
 
@@ -317,6 +463,20 @@ static int validate_pico_packet(const uint8_t *data, size_t len)
     return 0;
 }
 
+/*
+Nombre de funcion: process_complete_message
+Que hace: Procesa un mensaje completo ya reensamblado (tras recibir un
+frame END), según el modo configurado:
+  - MODE_TEST_TXT: lo imprime como texto.
+  - MODE_TEST_FRAME: lo imprime en hexadecimal y valida (sin reenviar).
+  - MODE_NORMAL: lo valida y, si es válido, lo reenvía a la Pico por TCP.
+En todos los casos, al terminar reinicia el buffer (buffer_reset) para
+el siguiente mensaje.
+Que recibe:
+  - config: configuración actual (modo, IP/puerto de la Pico).
+  - rx_buffer: buffer dinámico con el mensaje completo reensamblado.
+Que retorna: Nada (void).
+*/
 static void process_complete_message(
     const struct receiver_config *config,
     struct dynamic_buffer *rx_buffer
@@ -365,6 +525,28 @@ static void process_complete_message(
     }
 }
 
+/*
+Nombre de funcion: process_raw_frame
+Que hace: Procesa una trama Ethernet cruda recibida por el socket
+AF_PACKET: verifica tamaño mínimo y EtherType, extrae y valida el
+pov_frame_header (magic, tipo, longitud), y según el tipo:
+  - POV_FRAME_TYPE_DATA: agrega el chunk al buffer de reensamblado
+    (buffer_append) e imprime el progreso.
+  - POV_FRAME_TYPE_END: llama a process_complete_message con lo
+    acumulado hasta ahora.
+Tramas con magic inválido, EtherType distinto, tamaño insuficiente o
+tipo desconocido se descartan (con warning en algunos casos).
+Que recibe:
+  - frame: buffer con la trama Ethernet completa (incluye header Ethernet).
+  - frame_size: tamaño de "frame" en bytes, tal como lo devolvió recvfrom.
+  - rx_buffer: buffer dinámico de reensamblado, compartido entre llamadas.
+  - config: configuración actual (modo, usado para decidir si se imprime
+    hexdump adicional de depuración).
+Que retorna:
+  - 0 en el caso normal (trama procesada, ignorada o descartada por warning).
+  - -1 si buffer_append falla (mensaje demasiado grande o sin memoria);
+    en ese caso también se reinicia rx_buffer.
+*/
 static int process_raw_frame(
     const uint8_t *frame,
     ssize_t frame_size,
@@ -379,6 +561,7 @@ static int process_raw_frame(
     uint32_t magic;
     uint16_t chunk_len;
 
+    // Trama demasiado pequeña para contener header Ethernet + header POV
     if (frame_size < ETH_HLEN + (ssize_t)sizeof(struct pov_frame_header))
         return 0;
 
@@ -406,6 +589,7 @@ static int process_raw_frame(
         return 0;
     }
 
+    // El chunk declarado en el header no puede ser más grande que lo realmente recibido
     if (sizeof(struct pov_frame_header) + chunk_len > payload_len) {
         fprintf(stderr,
                 "[Warn] Frame incompleto. payload_len=%zu, chunk_len=%u\n",
@@ -444,6 +628,23 @@ static int process_raw_frame(
     return 0;
 }
 
+/*
+Nombre de funcion: parse_config
+Que hace: Interpreta los argumentos de línea de comandos (argv) y llena
+"config" según el modo solicitado:
+  - "normal" <IP_PICO> [interfaz] [puerto]
+  - "txt" [interfaz]
+  - "frame" [interfaz]
+Aplica valores por defecto (DEFAULT_USB_INTERFACE, DEFAULT_PICO_PORT)
+cuando los argumentos opcionales no se proporcionan.
+Que recibe:
+  - argc, argv: argumentos de línea de comandos del programa.
+  - config: [salida] estructura a llenar con la configuración resultante.
+Que retorna:
+  - 0 si los argumentos son válidos y "config" quedó configurado.
+  - -1 si los argumentos son insuficientes, el modo es desconocido, o el
+    puerto especificado es inválido (fuera de 1..65535).
+*/
 static int parse_config(int argc, char **argv, struct receiver_config *config)
 {
     memset(config, 0, sizeof(*config));
@@ -501,6 +702,22 @@ static int parse_config(int argc, char **argv, struct receiver_config *config)
     return -1;
 }
 
+/*
+Nombre de funcion: main
+Que hace:
+  - Parsea los argumentos con parse_config (si fallan, imprime uso y sale).
+  - Imprime un resumen de la configuración (modo, interfaz, EtherType,
+    destino Pico según el modo).
+  - Abre el socket raw (open_raw_receiver) sobre la interfaz indicada.
+  - Entra en un loop infinito: recibe tramas con recvfrom y las procesa
+    con process_raw_frame, hasta un error de recvfrom distinto de EINTR.
+  - Libera el buffer de reensamblado y cierra el socket antes de salir.
+Que recibe:
+  - argc, argv: argumentos de línea de comandos (ver parse_config).
+Que retorna:
+  - 1 si los argumentos son inválidos o falla open_raw_receiver.
+  - 0 al salir del loop principal (por error de recvfrom).
+*/
 int main(int argc, char **argv)
 {
     struct receiver_config config;

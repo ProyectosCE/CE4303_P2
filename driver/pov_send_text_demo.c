@@ -1,7 +1,23 @@
+c/*
+Nombre archivo: pov_send_text_demo.c
+Que hace: Programa de demostración mínimo que abre el driver POV y le
+escribe directamente una cadena de texto (sin formato de paquete POV),
+usando pov_driver_send_text. Sirve para probar el "modo txt" del receptor.
+*/
+
 #include "pov_driver_lib.h"
 
 #include <stdio.h>
 
+/*
+Nombre de funcion: main
+Que hace: Abre el dispositivo del driver, envía un texto fijo de prueba
+mediante pov_driver_send_text, y cierra el dispositivo.
+Que recibe: Nada (no usa argc/argv).
+Que retorna:
+  - 0 si el texto se envió correctamente.
+  - 1 si falla la apertura del driver o el envío del texto.
+*/
 int main(void)
 {
     int fd;
