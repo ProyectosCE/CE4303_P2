@@ -4,20 +4,36 @@
 #include <string.h>
 #include <stdio.h>
 
-uint64_t display_accum_count(uint32_t width) {
-    return (uint64_t)width * (uint64_t)PICO_LED_COUNT;
+uint64_t display_final_accum_count(void) {
+    return
+        (uint64_t)PICO_COLUMN_COUNT *
+        (uint64_t)PICO_LED_COUNT;
 }
 
-uint64_t display_accum_size_bytes(uint32_t width) {
-    return display_accum_count(width) * sizeof(DisplayAccum);
+uint64_t display_final_accum_size_bytes(void) {
+    return
+        display_final_accum_count() *
+        sizeof(DisplayAccum);
+}
+
+void display_accum_clear(DisplayAccum *accum) {
+    if (accum == NULL) {
+        return;
+    }
+
+    memset(
+        accum,
+        0,
+        display_final_accum_size_bytes()
+    );
 }
 
 void display_accum_merge(
     DisplayAccum *destination,
-    const DisplayAccum *source,
-    uint32_t width
+    const DisplayAccum *source
 ) {
-    uint64_t count = display_accum_count(width);
+    uint64_t count =
+        display_final_accum_count();
 
     for (uint64_t i = 0; i < count; i++) {
         destination[i].on_count += source[i].on_count;
@@ -26,15 +42,14 @@ void display_accum_merge(
 }
 
 int display_frame_build_from_accum(
-    uint32_t width,
     const DisplayAccum *accum,
     DisplayFrame *frame
 ) {
-    frame->columns = width;
+    frame->columns = PICO_COLUMN_COUNT;
     frame->leds_per_column = PICO_LED_COUNT;
 
     uint64_t rgb_size =
-        (uint64_t)width *
+        (uint64_t)PICO_COLUMN_COUNT *
         (uint64_t)PICO_LED_COUNT *
         3u;
 
@@ -47,7 +62,7 @@ int display_frame_build_from_accum(
 
     memset(frame->rgb, 0, rgb_size);
 
-    for (uint32_t col = 0; col < width; col++) {
+    for (uint32_t col = 0; col < PICO_COLUMN_COUNT; col++) {
         for (uint32_t led = 0; led < PICO_LED_COUNT; led++) {
 
             uint64_t accum_index =
@@ -62,10 +77,6 @@ int display_frame_build_from_accum(
             uint32_t total_count =
                 accum[accum_index].total_count;
 
-            /*
-             * Si la mayoría de pixeles del bloque vertical estaban encendidos,
-             * encendemos ese LED de la columna.
-             */
             int is_on =
                 total_count > 0 &&
                 ((uint64_t)on_count * 2u >= (uint64_t)total_count);

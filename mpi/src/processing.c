@@ -1,5 +1,9 @@
 #include "processing.h"
 
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
 static uint8_t get_pbm_bit(
     const uint8_t *plain_rows,
     uint32_t row_stride_bytes,
@@ -38,14 +42,24 @@ static uint64_t heavy_pixel_work(
     return value;
 }
 
-void process_rows_to_display_accum(
+/*
+ * RONDA 2:
+ *
+ * Reduce columnas originales:
+ *
+ * width columnas -> 9 columnas
+ *
+ * Resultado:
+ *
+ * row_count filas locales x 9 columnas reducidas
+ */
+static void reduce_columns_to_9(
     const uint8_t *plain_rows,
     uint32_t width,
-    uint32_t height,
     uint32_t row_stride_bytes,
     uint32_t start_row,
     uint32_t row_count,
-    DisplayAccum *accum,
+    DisplayAccum *row_column_accum,
     uint64_t *active_pixels_out,
     uint64_t *checksum_out
 ) {
@@ -56,17 +70,6 @@ void process_rows_to_display_accum(
 
         uint32_t global_row =
             start_row + local_row;
-
-        /*
-         * Mapeo vertical:
-         * una imagen de height filas se comprime a 9 LEDs.
-         */
-        uint32_t led_index =
-            (uint32_t)(((uint64_t)global_row * PICO_LED_COUNT) / height);
-
-        if (led_index >= PICO_LED_COUNT) {
-            led_index = PICO_LED_COUNT - 1;
-        }
 
         for (uint32_t col = 0; col < width; col++) {
 
@@ -85,13 +88,21 @@ void process_rows_to_display_accum(
                     bit
                 );
 
-            uint64_t accum_index =
-                (uint64_t)col * PICO_LED_COUNT + led_index;
+            uint32_t reduced_col =
+                (uint32_t)(((uint64_t)col * PICO_COLUMN_COUNT) / width);
 
-            accum[accum_index].total_count++;
+            if (reduced_col >= PICO_COLUMN_COUNT) {
+                reduced_col = PICO_COLUMN_COUNT - 1;
+            }
+
+            uint64_t accum_index =
+                ((uint64_t)local_row * PICO_COLUMN_COUNT) +
+                reduced_col;
+
+            row_column_accum[accum_index].total_count++;
 
             if (bit) {
-                accum[accum_index].on_count++;
+                row_column_accum[accum_index].on_count++;
                 active_pixels++;
             }
         }
@@ -99,4 +110,126 @@ void process_rows_to_display_accum(
 
     *active_pixels_out = active_pixels;
     *checksum_out = checksum;
+}
+
+/*
+ * RONDA 3:
+ *
+ * Toma la matriz:
+ *
+ * row_count filas locales x 9 columnas reducidas
+ *
+ * y la reduce a:
+ *
+ * 9 columnas x 9 filas/LEDs
+ *
+ * Conceptualmente es como trabajar por columnas reducidas y comprimir
+ * las filas globales a 9 buckets verticales.
+ */
+static void reduce_rows_to_9(
+    const DisplayAccum *row_column_accum,
+    uint32_t height,
+    uint32_t start_row,
+    uint32_t row_count,
+    DisplayAccum *final_accum
+) {
+    for (uint32_t local_row = 0; local_row < row_count; local_row++) {
+
+        uint32_t global_row =
+            start_row + local_row;
+
+        uint32_t reduced_row =
+            (uint32_t)(((uint64_t)global_row * PICO_LED_COUNT) / height);
+
+        if (reduced_row >= PICO_LED_COUNT) {
+            reduced_row = PICO_LED_COUNT - 1;
+        }
+
+        for (uint32_t reduced_col = 0;
+             reduced_col < PICO_COLUMN_COUNT;
+             reduced_col++) {
+
+            uint64_t source_index =
+                ((uint64_t)local_row * PICO_COLUMN_COUNT) +
+                reduced_col;
+
+            uint64_t destination_index =
+                ((uint64_t)reduced_col * PICO_LED_COUNT) +
+                reduced_row;
+
+            final_accum[destination_index].on_count +=
+                row_column_accum[source_index].on_count;
+
+            final_accum[destination_index].total_count +=
+                row_column_accum[source_index].total_count;
+        }
+    }
+}
+
+/*
+ * RONDA 1 ya ocurrió antes de llamar esta función:
+ * plain_rows ya viene descifrado.
+ *
+ * Esta función ejecuta:
+ *
+ * RONDA 2: reducción de columnas
+ * RONDA 3: reducción de filas
+ */
+int process_rows_three_rounds(
+    const uint8_t *plain_rows,
+    uint32_t width,
+    uint32_t height,
+    uint32_t row_stride_bytes,
+    uint32_t start_row,
+    uint32_t row_count,
+    DisplayAccum *final_accum,
+    uint64_t *active_pixels_out,
+    uint64_t *checksum_out
+) {
+    if (row_count == 0) {
+        *active_pixels_out = 0;
+        *checksum_out = 0;
+        return 0;
+    }
+
+    uint64_t row_column_count =
+        (uint64_t)row_count *
+        (uint64_t)PICO_COLUMN_COUNT;
+
+    DisplayAccum *row_column_accum =
+        calloc(row_column_count, sizeof(DisplayAccum));
+
+    if (row_column_accum == NULL) {
+        printf("ERROR: malloc row_column_accum falló.\n");
+        return -1;
+    }
+
+    uint64_t active_pixels = 0;
+    uint64_t checksum = 0;
+
+    reduce_columns_to_9(
+        plain_rows,
+        width,
+        row_stride_bytes,
+        start_row,
+        row_count,
+        row_column_accum,
+        &active_pixels,
+        &checksum
+    );
+
+    reduce_rows_to_9(
+        row_column_accum,
+        height,
+        start_row,
+        row_count,
+        final_accum
+    );
+
+    free(row_column_accum);
+
+    *active_pixels_out = active_pixels;
+    *checksum_out = checksum;
+
+    return 0;
 }

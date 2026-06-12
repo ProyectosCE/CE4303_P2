@@ -2,7 +2,7 @@
 CC=mpicc
 CFLAGS=-Wall -Wextra -O2 -Iinclude
 
-TARGET=mpi
+TARGET=mpi_proyectosce
 
 SRC_DIR=src
 OBJ_DIR=build

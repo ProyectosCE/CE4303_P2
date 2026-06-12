@@ -2,9 +2,9 @@
 #define DISPLAY_FRAME_H
 
 #include <stdint.h>
-#include <stddef.h>
 
-#define PICO_LED_COUNT 9
+#define PICO_LED_COUNT     9
+#define PICO_COLUMN_COUNT  9
 
 #define COLOR_ON_R   0
 #define COLOR_ON_G   0
@@ -25,18 +25,18 @@ typedef struct {
     uint8_t *rgb;
 } DisplayFrame;
 
-uint64_t display_accum_count(uint32_t width);
+uint64_t display_final_accum_count(void);
 
-uint64_t display_accum_size_bytes(uint32_t width);
+uint64_t display_final_accum_size_bytes(void);
+
+void display_accum_clear(DisplayAccum *accum);
 
 void display_accum_merge(
     DisplayAccum *destination,
-    const DisplayAccum *source,
-    uint32_t width
+    const DisplayAccum *source
 );
 
 int display_frame_build_from_accum(
-    uint32_t width,
     const DisplayAccum *accum,
     DisplayFrame *frame
 );

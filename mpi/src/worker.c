@@ -88,8 +88,7 @@ int run_worker(int rank) {
     uint8_t *encrypted_segment = NULL;
     uint8_t *plain_segment = NULL;
 
-    uint64_t accum_size =
-        display_accum_size_bytes(width);
+    uint64_t accum_size = display_final_accum_size_bytes();
 
     DisplayAccum *local_accum =
         calloc(1, accum_size);
@@ -129,18 +128,17 @@ int run_worker(int rank) {
     uint64_t checksum = 0;
 
     if (segment_size > 0) {
+            xtea_ctr_crypt_segment(
+                encrypted_segment,
+                plain_segment,
+                segment_size,
+                cipher_rounds,
+                nonce0,
+                nonce1,
+                global_block_offset
+            );
 
-        xtea_ctr_crypt_segment(
-            encrypted_segment,
-            plain_segment,
-            segment_size,
-            cipher_rounds,
-            nonce0,
-            nonce1,
-            global_block_offset
-        );
-
-        process_rows_to_display_accum(
+            if (process_rows_three_rounds(
             plain_segment,
             width,
             height,
@@ -150,7 +148,11 @@ int run_worker(int rank) {
             local_accum,
             &active_pixels,
             &checksum
-        );
+        ) < 0) {
+        printf("WORKER rank %d ERROR: procesamiento falló.\n", rank);
+        fflush(stdout);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
     }
 
     double end_time =
@@ -217,7 +219,7 @@ int run_worker(int rank) {
     }
 
     printf(
-        "WORKER rank %d sent result | rows=%u | accum=%llu bytes | active=%llu | time=%.6f s\n",
+        "WORKER rank %d sent result | rows=%u | accum_9x9=%llu bytes | active=%llu | time=%.6f s\n",
         rank,
         row_count,
         (unsigned long long)accum_size,

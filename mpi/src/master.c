@@ -13,14 +13,16 @@
 #include "mpi_transfer.h"
 #include "pbm_debug.h"
 #include "display_frame.h"
-#include "library_placeholder.h"
+#include "driver_output.h"
 
 #define OUTPUT_PACKET_FILE "driver_packet.bin"
 #define DECRYPTED_PBM_FILE "imagen_desc.pbm"
 
 int run_master(
     int size,
-    const char *input_file
+    const char *input_file,
+    const char *device_path,
+    int send_to_driver
 ) {
     char hostname[256];
     gethostname(hostname, sizeof(hostname));
@@ -56,7 +58,7 @@ int run_master(
     memset(final_plain_payload, 0, header.payload_size);
 
     uint64_t accum_size =
-        display_accum_size_bytes(header.width);
+        display_final_accum_size_bytes();
 
     DisplayAccum *global_accum =
         calloc(1, accum_size);
@@ -236,8 +238,7 @@ int run_master(
 
             display_accum_merge(
                 global_accum,
-                worker_accum,
-                header.width
+                worker_accum
             );
         }
 
@@ -289,10 +290,9 @@ int run_master(
     DisplayFrame frame;
 
     if (display_frame_build_from_accum(
-            header.width,
-            global_accum,
-            &frame
-        ) < 0) {
+        global_accum,
+        &frame
+    ) < 0) {
         free(worker_accum);
         free(global_accum);
         free(final_plain_payload);
@@ -327,7 +327,7 @@ int run_master(
         master_end_time - master_start_time;
 
     uint64_t final_packet_rgb_size =
-        (uint64_t)header.width *
+        (uint64_t)PICO_COLUMN_COUNT *
         (uint64_t)PICO_LED_COUNT *
         3u;
 
@@ -335,12 +335,15 @@ int run_master(
     printf("Master total time   : %.6f s\n", master_total_time);
     printf("Workers used        : %d\n", workers_count);
     printf("Image size          : %u x %u\n", header.width, header.height);
+    printf("Reduced output     : %u x %u\n",
+        PICO_COLUMN_COUNT,
+        PICO_LED_COUNT);
     printf("Cipher rounds       : %u\n", header.cipher_rounds);
     printf("Input payload bytes : %u\n", header.payload_size);
     printf("Output RGB bytes    : %llu\n",
-           (unsigned long long)final_packet_rgb_size);
+        (unsigned long long)final_packet_rgb_size);
     printf("Output packet bytes : %llu\n",
-           (unsigned long long)(final_packet_rgb_size + 2u));
+        (unsigned long long)(final_packet_rgb_size + 2u));
 
     free(worker_accum);
     free(global_accum);
