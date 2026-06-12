@@ -1,0 +1,10 @@
+#Carpeta images
+images/
+
+#Carpeta build
+build/
+
+#Archivos en el /
+mpi
+*.bin
+*.pbm
